@@ -6,7 +6,9 @@ import AgendaPage from './pages/AgendaPage';
 import TravelPage from './pages/TravelPage';
 import DocumentsPage from './pages/DocumentsPage';
 import GovernancePage from './pages/GovernancePage';
-import TasksProjectsPage from './pages/TasksProjectsPage';
+import TasksPage from './pages/TasksPage';
+import ProjectsPage from './pages/ProjectsPage';
+import FinancialPage from './pages/FinancialPage';
 import StakeholdersPage from './pages/StakeholdersPage';
 import AIAssistantPage from './pages/AIAssistantPage';
 
@@ -20,7 +22,9 @@ const router = createBrowserRouter([
       { path: 'travel', element: <TravelPage /> },
       { path: 'documents', element: <DocumentsPage /> },
       { path: 'governance', element: <GovernancePage /> },
-      { path: 'tasks-projects', element: <TasksProjectsPage /> },
+      { path: 'tasks', element: <TasksPage /> },
+      { path: 'projects', element: <ProjectsPage /> },
+      { path: 'financial', element: <FinancialPage /> },
       { path: 'stakeholders', element: <StakeholdersPage /> },
       { path: 'ai-assistant', element: <AIAssistantPage /> },
     ],
