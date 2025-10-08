@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  web:
+    build: ./Backend/FastAPI
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./Backend/FastAPI:/code
+
+  nestjs:
+    build: ./Backend/NestJS
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./Backend/NestJS:/app
+    depends_on:
+      - web
+
+  frontend:
+    build: .
+    ports:
+      - "80:80"
+    volumes:
+      - .:/app
+    depends_on:
+      - nestjs
