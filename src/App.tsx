@@ -34,7 +34,7 @@ const AppLayout: React.FC = () => {
       </Sider>
       <Layout>
         <Header style={{ padding: 0, background: colorBgContainer }} />
-        <Content style={{ margin: '0 16px' }}>
+        <Content style={{ margin: '0' }}>
           <motion.div
             key={location.pathname}
             initial={{ opacity: 0, y: 20 }}
