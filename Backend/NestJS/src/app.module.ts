@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, NestModule, MiddlewareConsumer } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -29,6 +29,7 @@ import { DataRequest } from './compliance/data-request.entity';
 import { MonitoringLog } from './monitoring/monitoring-log.entity';
 import { TenantSubscriber } from './common/subscribers/tenant.subscriber';
 import { EncryptedFieldSubscriber } from './common/decorators/encrypted-field.decorator';
+import { HttpLoggingMiddleware } from './monitoring/http-logging.middleware';
 
 @Module({
   imports: [
@@ -61,4 +62,10 @@ import { EncryptedFieldSubscriber } from './common/decorators/encrypted-field.de
   controllers: [AppController],
   providers: [AppService, TenantSubscriber, EncryptedFieldSubscriber],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer) {
+    consumer
+      .apply(HttpLoggingMiddleware)
+      .forRoutes('*');
+  }
+}
