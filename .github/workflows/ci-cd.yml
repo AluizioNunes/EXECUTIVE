@@ -1,0 +1,168 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  # Job de teste
+  test:
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: executive_secretariat_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+        cache: 'npm'
+        cache-dependency-path: Backend/NestJS/package-lock.json
+
+    - name: Install backend dependencies
+      run: |
+        cd Backend/NestJS
+        npm ci
+
+    - name: Run backend tests
+      run: |
+        cd Backend/NestJS
+        npm run test
+      env:
+        DATABASE_URL: postgresql://postgres:postgres@localhost:5432/executive_secretariat_test
+        JWT_SECRET: test-jwt-secret
+        ENCRYPTION_SECRET_KEY: test-encryption-key
+
+  # Job de build do backend
+  build-backend:
+    needs: test
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+        cache: 'npm'
+        cache-dependency-path: Backend/NestJS/package-lock.json
+
+    - name: Install backend dependencies
+      run: |
+        cd Backend/NestJS
+        npm ci
+
+    - name: Build backend
+      run: |
+        cd Backend/NestJS
+        npm run build
+
+    - name: Upload backend build artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: backend-build
+        path: Backend/NestJS/dist/
+
+  # Job de build do frontend
+  build-frontend:
+    needs: test
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '20'
+        cache: 'npm'
+
+    - name: Install frontend dependencies
+      run: npm ci
+
+    - name: Build frontend
+      run: npm run build
+
+    - name: Upload frontend build artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: frontend-build
+        path: dist/
+
+  # Job de deploy para staging
+  deploy-staging:
+    needs: [build-backend, build-frontend]
+    runs-on: ubuntu-latest
+    environment: staging
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Download backend artifacts
+      uses: actions/download-artifact@v3
+      with:
+        name: backend-build
+        path: Backend/NestJS/dist/
+
+    - name: Download frontend artifacts
+      uses: actions/download-artifact@v3
+      with:
+        name: frontend-build
+        path: dist/
+
+    - name: Deploy to staging
+      run: |
+        echo "Deploying to staging environment"
+        # Aqui iriam os comandos para deploy no ambiente de staging
+        # Exemplo: docker build, docker push, kubectl apply, etc.
+
+  # Job de deploy para produção (apenas na branch main)
+  deploy-production:
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    environment: production
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Download backend artifacts
+      uses: actions/download-artifact@v3
+      with:
+        name: backend-build
+        path: Backend/NestJS/dist/
+
+    - name: Download frontend artifacts
+      uses: actions/download-artifact@v3
+      with:
+        name: frontend-build
+        path: dist/
+
+    - name: Deploy to production
+      run: |
+        echo "Deploying to production environment"
+        # Aqui iriam os comandos para deploy no ambiente de produção
+        # Exemplo: docker build, docker push, kubectl apply, etc.

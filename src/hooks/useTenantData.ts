@@ -20,6 +20,7 @@ interface Task {
   title: string;
   priority: string;
   dueDate: string;
+  executive?: string;
 }
 
 // Mock data
@@ -56,15 +57,15 @@ const mockMeetings: Record<number, Meeting[]> = {
 
 const mockTasks: Record<number, Task[]> = {
   1: [
-    { id: 1, title: 'Preparar apresentação para conselho', priority: 'Alta', dueDate: '15/10/2025' },
-    { id: 2, title: 'Revisar orçamento anual', priority: 'Média', dueDate: '20/10/2025' },
+    { id: 1, title: 'Preparar apresentação para conselho', priority: 'Alta', dueDate: '15/10/2025', executive: 'João Silva' },
+    { id: 2, title: 'Revisar orçamento anual', priority: 'Média', dueDate: '20/10/2025', executive: 'Maria Santos' },
   ],
   2: [
-    { id: 3, title: 'Criar briefing de campanha', priority: 'Alta', dueDate: '12/10/2025' },
-    { id: 4, title: 'Organizar reunião com fornecedores', priority: 'Baixa', dueDate: '25/10/2025' },
+    { id: 3, title: 'Criar briefing de campanha', priority: 'Alta', dueDate: '12/10/2025', executive: 'Ana Costa' },
+    { id: 4, title: 'Organizar reunião com fornecedores', priority: 'Baixa', dueDate: '25/10/2025', executive: 'Carlos Lima' },
   ],
   3: [
-    { id: 5, title: 'Elaborar políticas de RH', priority: 'Média', dueDate: '18/10/2025' },
+    { id: 5, title: 'Elaborar políticas de RH', priority: 'Média', dueDate: '18/10/2025', executive: 'Fernanda Brito' },
   ],
 };
 

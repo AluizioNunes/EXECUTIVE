@@ -1,13 +1,27 @@
+FROM node:18-alpine AS builder
+
+WORKDIR /app
+
+COPY package*.json ./
+
+RUN npm ci --only=production && npm cache clean --force
+
+COPY . .
+
+RUN npm run build
+
 FROM node:18-alpine
 
 WORKDIR /app
 
 COPY package*.json ./
 
-RUN npm install
+RUN npm ci --only=production && npm cache clean --force
 
-COPY . .
+COPY --from=builder /app/dist ./dist
 
-RUN npm run build
+COPY --from=builder /app/node_modules ./node_modules
 
-CMD ["npm", "run", "start:prod"]
+EXPOSE 3000
+
+CMD ["node", "dist/main.js"]

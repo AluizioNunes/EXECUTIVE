@@ -4,15 +4,16 @@ services:
   postgres:
     image: postgres:15
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: executive_secretariat
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
       - app-network
+    restart: unless-stopped
 
   backend:
     build: 
@@ -20,22 +21,26 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/executive_secretariat
-      - JWT_SECRET=your-jwt-secret-key-change-in-production
-      - ENCRYPTION_SECRET_KEY=your-encryption-secret-key-change-in-production
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      - JWT_SECRET=${JWT_SECRET}
+      - ENCRYPTION_SECRET_KEY=${ENCRYPTION_SECRET_KEY}
+      - NODE_ENV=production
     depends_on:
       - postgres
     networks:
       - app-network
+    restart: unless-stopped
 
   frontend:
     build: .
     ports:
       - "80:80"
+      - "443:443"
     depends_on:
       - backend
     networks:
       - app-network
+    restart: unless-stopped
 
 volumes:
   postgres_data:

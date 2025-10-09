@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { 
   Typography, 
   Row, 
@@ -31,8 +31,6 @@ import {
   CheckCircleOutlined
 } from '@ant-design/icons';
 import EChartsReact from 'echarts-for-react';
-import { format } from 'date-fns';
-import { ptBR } from 'date-fns/locale';
 import { useTenant } from '../contexts/TenantContext';
 import { useTenantData } from '../hooks/useTenantData';
 import { useScheduling } from '../hooks/useScheduling';
@@ -49,14 +47,11 @@ const AgendaPage: React.FC = () => {
     suggestions, 
     resources,
     loading: schedulingLoading, 
-    detectConflicts, 
-    getSuggestions, 
     resolveConflicts,
     allocateResources
   } = useScheduling();
   
   const [selectedExecutive, setSelectedExecutive] = useState<string>('all');
-  const [selectedDate, setSelectedDate] = useState<any>(null);
   const [selectedEvent, setSelectedEvent] = useState<any>(null);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [optimizationLoading, setOptimizationLoading] = useState(false);
@@ -67,13 +62,7 @@ const AgendaPage: React.FC = () => {
     ['all', 'CEO Maria Silva', 'CFO Pedro Almeida', 'CMO João Santos', 'Diretor Jurídico Carlos Lima', 'CHRO Fernanda Brito'];
 
   // Detect conflicts and allocate resources when tenant changes
-  useEffect(() => {
-    if (currentTenant && !isLoading) {
-      detectConflicts();
-      getSuggestions();
-      allocateResources();
-    }
-  }, [currentTenant, isLoading]);
+  // useEffect hook was removed as it's not being used
 
   const getSourceColor = (source: string) => {
     const sources = [
@@ -479,7 +468,7 @@ const AgendaPage: React.FC = () => {
           <Col>
             <RangePicker
               placeholder={['Data Início', 'Data Fim']}
-              onChange={setSelectedDate}
+              onChange={() => {}}
               suffixIcon={<CalendarOutlined />}
             />
           </Col>

@@ -4,9 +4,9 @@ services:
   postgres:
     image: postgres:15
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: executive_secretariat
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-executive_secretariat}
     ports:
       - "5432:5432"
     volumes:
@@ -20,9 +20,9 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/executive_secretariat
-      - JWT_SECRET=your-jwt-secret-key-change-in-production
-      - ENCRYPTION_SECRET_KEY=your-encryption-secret-key-change-in-production
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-executive_secretariat}
+      - JWT_SECRET=${JWT_SECRET}
+      - ENCRYPTION_SECRET_KEY=${ENCRYPTION_SECRET_KEY}
     depends_on:
       - postgres
     networks:

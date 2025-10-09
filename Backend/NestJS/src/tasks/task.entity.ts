@@ -2,6 +2,7 @@ import { Entity, Column, ManyToOne } from 'typeorm';
 import { BaseTenantEntity } from '../common/entities/base.entity';
 import { User } from '../auth/user.entity';
 import { Meeting } from '../meetings/meeting.entity';
+import { Executive } from '../executives/executive.entity';
 
 export enum TaskStatus {
   TODO = 'todo',
@@ -55,4 +56,7 @@ export class Task extends BaseTenantEntity {
 
   @ManyToOne(() => Meeting, meeting => meeting.tasks, { nullable: true })
   meeting: Meeting;
+
+  @ManyToOne(() => Executive, { nullable: true, eager: true })
+  executive: Executive;
 }

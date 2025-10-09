@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useTenant } from '../contexts/TenantContext';
 
 // Interfaces para os dados de analytics
