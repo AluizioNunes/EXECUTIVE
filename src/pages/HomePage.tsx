@@ -1,21 +1,19 @@
 import React from 'react';
-import { Typography, Row, Col, Card, Statistic, List, Tag } from 'antd';
-import { ArrowUpOutlined, ArrowDownOutlined } from '@ant-design/icons';
+import { Typography, Row, Col, Card, Statistic, List, Tag, Alert, Button } from 'antd';
+import { ArrowUpOutlined, ArrowDownOutlined, ApartmentOutlined, CalendarOutlined, ProjectOutlined } from '@ant-design/icons';
 import EChartsReact from 'echarts-for-react';
 import { format } from 'date-fns';
-import {
-  dashboardStats,
-  upcomingMeetings,
-  executiveTasks,
-  communicationChannels,
-  documentApprovalStatus,
-  executiveInteractionFrequency,
-} from '../data/mockData';
+import { useTenant } from '../contexts/TenantContext';
+import { useTenantData } from '../hooks/useTenantData';
+import { useTenantNavigation } from '../hooks/useTenantNavigation';
 
 const { Title, Paragraph } = Typography;
 
 const HomePage: React.FC = () => {
   const today = new Date();
+  const { currentTenant } = useTenant();
+  const { executives, meetings, tasks, loading } = useTenantData();
+  const { navigateTo } = useTenantNavigation();
 
   const getPieChartOption = (data: any[], title: string) => ({
     title: {
@@ -74,10 +72,71 @@ const HomePage: React.FC = () => {
     ],
   });
 
+  // Mock data for dashboard stats
+  const dashboardStats = [
+    { title: 'Reuniões Agendadas (Hoje)', value: meetings.length, suffix: 'reuniões' },
+    { title: 'Tarefas Pendentes (Alta Prioridade)', value: tasks.filter(t => t.priority === 'Alta').length, suffix: 'tarefas' },
+    { title: 'Executivos', value: executives.length, suffix: 'executivos' },
+    { title: 'Tarefas Concluídas', value: tasks.filter(t => t.priority === 'Alta').length, suffix: 'tarefas' },
+  ];
+
+  // Mock data for communication channels
+  const communicationChannels = [
+    { value: 45, name: 'E-mails (Interno)' },
+    { value: 30, name: 'E-mails (Externo)' },
+    { value: 15, name: 'Mensagens Instantâneas' },
+    { value: 10, name: 'Telefone' },
+  ];
+
+  // Mock data for document approval status
+  const documentApprovalStatus = [
+    { value: 7, name: 'Aguardando' },
+    { value: 12, name: 'Aprovados (Hoje)' },
+    { value: 3, name: 'Rejeitados (Hoje)' },
+  ];
+
+  // Mock data for executive interaction frequency
+  const executiveInteractionFrequency = executives.map((exec, index) => ({
+    name: exec.name,
+    value: (index + 1) * 2,
+  }));
+
   return (
     <div>
+      {/* Tenant Context Banner */}
+      {currentTenant && (
+        <Alert
+          message={
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <ApartmentOutlined />
+              <span>Você está visualizando dados da empresa: <strong>{currentTenant.name}</strong></span>
+            </div>
+          }
+          type="info"
+          showIcon
+          style={{ marginBottom: 24 }}
+        />
+      )}
+      
       <Title level={2}>Dashboard Executivo</Title>
       <Paragraph>Visão geral das atividades de secretariado para {format(today, 'dd/MM/yyyy')}.</Paragraph>
+
+      {/* Quick Actions */}
+      <div style={{ marginBottom: 24, display: 'flex', gap: 12 }}>
+        <Button 
+          type="primary" 
+          icon={<CalendarOutlined />}
+          onClick={() => navigateTo('/agenda')}
+        >
+          Ver Agenda
+        </Button>
+        <Button 
+          icon={<ProjectOutlined />}
+          onClick={() => navigateTo('/tasks')}
+        >
+          Ver Tarefas
+        </Button>
+      </div>
 
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
         {dashboardStats.map((stat, index) => (
@@ -100,12 +159,13 @@ const HomePage: React.FC = () => {
           <Card title="Próximas Reuniões">
             <List
               itemLayout="horizontal"
-              dataSource={upcomingMeetings}
+              dataSource={meetings.slice(0, 3)}
+              loading={loading}
               renderItem={item => (
                 <List.Item>
                   <List.Item.Meta
                     title={<a href="#">{item.title}</a>}
-                    description={`Com: ${item.executive} | Local: ${item.location} | Horário: ${item.time}`}
+                    description={`Com: ${item.executive} | Horário: ${item.time}`}
                   />
                 </List.Item>
               )}
@@ -116,15 +176,16 @@ const HomePage: React.FC = () => {
           <Card title="Tarefas Urgentes/Próximas">
             <List
               itemLayout="horizontal"
-              dataSource={executiveTasks}
+              dataSource={tasks.slice(0, 3)}
+              loading={loading}
               renderItem={item => (
                 <List.Item>
                   <List.Item.Meta
                     title={<a href="#">{item.title}</a>}
                     description={
                       <>
-                        <span>Para: {item.executive} | Vencimento: {item.dueDate} | </span>
-                        <Tag color={item.priority === 'Alta' ? 'red' : 'orange'}>{item.priority}</Tag>
+                        <span>Para: {item.executive || 'Não atribuído'} | Vencimento: {item.dueDate} | </span>
+                        <Tag color={item.priority === 'Alta' ? 'red' : item.priority === 'Média' ? 'orange' : 'green'}>{item.priority}</Tag>
                       </>
                     }
                   />

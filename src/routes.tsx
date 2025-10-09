@@ -11,22 +11,48 @@ import ProjectsPage from './pages/ProjectsPage';
 import FinancialPage from './pages/FinancialPage';
 import StakeholdersPage from './pages/StakeholdersPage';
 import AIAssistantPage from './pages/AIAssistantPage';
+import AnalyticsPage from './pages/AnalyticsPage';
+
+// Wrapper components para passar tenant para as páginas
+const TenantAwarePageWrapper: React.FC<{ Component: React.ComponentType }> = ({ Component }) => {
+  // O tenant já está disponível através do contexto TenantContext
+  return <Component />;
+};
 
 const router = createBrowserRouter([
   {
     path: '/',
     element: <AppLayout />,
     children: [
-      { index: true, element: <HomePage /> },
-      { path: 'agenda', element: <AgendaPage /> },
-      { path: 'travel', element: <TravelPage /> },
-      { path: 'documents', element: <DocumentsPage /> },
-      { path: 'governance', element: <GovernancePage /> },
-      { path: 'tasks', element: <TasksPage /> },
-      { path: 'projects', element: <ProjectsPage /> },
-      { path: 'financial', element: <FinancialPage /> },
-      { path: 'stakeholders', element: <StakeholdersPage /> },
-      { path: 'ai-assistant', element: <AIAssistantPage /> },
+      { index: true, element: <TenantAwarePageWrapper Component={HomePage} /> },
+      { path: 'agenda', element: <TenantAwarePageWrapper Component={AgendaPage} /> },
+      { path: 'travel', element: <TenantAwarePageWrapper Component={TravelPage} /> },
+      { path: 'documents', element: <TenantAwarePageWrapper Component={DocumentsPage} /> },
+      { path: 'governance', element: <TenantAwarePageWrapper Component={GovernancePage} /> },
+      { path: 'tasks', element: <TenantAwarePageWrapper Component={TasksPage} /> },
+      { path: 'projects', element: <TenantAwarePageWrapper Component={ProjectsPage} /> },
+      { path: 'financial', element: <TenantAwarePageWrapper Component={FinancialPage} /> },
+      { path: 'stakeholders', element: <TenantAwarePageWrapper Component={StakeholdersPage} /> },
+      { path: 'ai-assistant', element: <TenantAwarePageWrapper Component={AIAssistantPage} /> },
+      { path: 'analytics', element: <TenantAwarePageWrapper Component={AnalyticsPage} /> },
+    ],
+  },
+  // Rotas específicas por tenant (opcional)
+  {
+    path: '/:tenantId',
+    element: <AppLayout />,
+    children: [
+      { index: true, element: <TenantAwarePageWrapper Component={HomePage} /> },
+      { path: 'agenda', element: <TenantAwarePageWrapper Component={AgendaPage} /> },
+      { path: 'travel', element: <TenantAwarePageWrapper Component={TravelPage} /> },
+      { path: 'documents', element: <TenantAwarePageWrapper Component={DocumentsPage} /> },
+      { path: 'governance', element: <TenantAwarePageWrapper Component={GovernancePage} /> },
+      { path: 'tasks', element: <TenantAwarePageWrapper Component={TasksPage} /> },
+      { path: 'projects', element: <TenantAwarePageWrapper Component={ProjectsPage} /> },
+      { path: 'financial', element: <TenantAwarePageWrapper Component={FinancialPage} /> },
+      { path: 'stakeholders', element: <TenantAwarePageWrapper Component={StakeholdersPage} /> },
+      { path: 'ai-assistant', element: <TenantAwarePageWrapper Component={AIAssistantPage} /> },
+      { path: 'analytics', element: <TenantAwarePageWrapper Component={AnalyticsPage} /> },
     ],
   },
 ]);

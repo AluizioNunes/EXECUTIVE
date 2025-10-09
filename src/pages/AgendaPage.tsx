@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Typography, 
   Row, 
@@ -14,7 +14,10 @@ import {
   Progress,
   Badge,
   Modal,
-  Descriptions
+  Descriptions,
+  Spin,
+  Alert,
+  message
 } from 'antd';
 import { 
   CalendarOutlined, 
@@ -23,32 +26,63 @@ import {
   EnvironmentOutlined,
   SyncOutlined,
   PlusOutlined,
-  FilterOutlined
+  FilterOutlined,
+  WarningOutlined,
+  CheckCircleOutlined
 } from '@ant-design/icons';
 import EChartsReact from 'echarts-for-react';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
-import {
-  calendarEvents,
-  calendarStats,
-  calendarSources,
-  executiveSchedule,
-} from '../data/mockData';
+import { useTenant } from '../contexts/TenantContext';
+import { useTenantData } from '../hooks/useTenantData';
+import { useScheduling } from '../hooks/useScheduling';
 
 const { Title, Paragraph, Text } = Typography;
 const { Option } = Select;
 const { RangePicker } = DatePicker;
 
 const AgendaPage: React.FC = () => {
+  const { currentTenant, isLoading } = useTenant();
+  const { meetings, loading: dataLoading } = useTenantData();
+  const { 
+    conflicts, 
+    suggestions, 
+    resources,
+    loading: schedulingLoading, 
+    detectConflicts, 
+    getSuggestions, 
+    resolveConflicts,
+    allocateResources
+  } = useScheduling();
+  
   const [selectedExecutive, setSelectedExecutive] = useState<string>('all');
   const [selectedDate, setSelectedDate] = useState<any>(null);
   const [selectedEvent, setSelectedEvent] = useState<any>(null);
   const [isModalVisible, setIsModalVisible] = useState(false);
+  const [optimizationLoading, setOptimizationLoading] = useState(false);
 
-  const executives = ['all', 'CEO Maria Silva', 'CFO Pedro Almeida', 'CMO João Santos', 'Diretor Jurídico Carlos Lima', 'CHRO Fernanda Brito'];
+  // Use tenant-specific data or mock data
+  const executives = currentTenant ? 
+    ['all', ...meetings.map(m => m.executive)] : 
+    ['all', 'CEO Maria Silva', 'CFO Pedro Almeida', 'CMO João Santos', 'Diretor Jurídico Carlos Lima', 'CHRO Fernanda Brito'];
+
+  // Detect conflicts and allocate resources when tenant changes
+  useEffect(() => {
+    if (currentTenant && !isLoading) {
+      detectConflicts();
+      getSuggestions();
+      allocateResources();
+    }
+  }, [currentTenant, isLoading]);
 
   const getSourceColor = (source: string) => {
-    const sourceConfig = calendarSources.find(s => s.name === source);
+    const sources = [
+      { name: 'Outlook', color: '#0078d4' },
+      { name: 'Google Calendar', color: '#4285f4' },
+      { name: 'Manual', color: '#52c41a' },
+      { name: 'Outros', color: '#fa8c16' },
+    ];
+    const sourceConfig = sources.find(s => s.name === source);
     return sourceConfig ? sourceConfig.color : '#1890ff';
   };
 
@@ -70,12 +104,69 @@ const AgendaPage: React.FC = () => {
     }
   };
 
-  const filteredEvents = calendarEvents.filter(event => {
-    const executiveMatch = selectedExecutive === 'all' || event.executive === selectedExecutive;
-    const dateMatch = !selectedDate || 
-      (event.start >= selectedDate[0] && event.start <= selectedDate[1]);
-    return executiveMatch && dateMatch;
-  });
+  // Mock data for calendar stats
+  const calendarStats = [
+    { title: 'Reuniões Hoje', value: meetings.length, color: '#1890ff' },
+    { title: 'Reuniões Esta Semana', value: meetings.length * 3, color: '#52c41a' },
+    { title: 'Reuniões Confirmadas', value: Math.floor(meetings.length * 0.8), color: '#722ed1' },
+    { title: 'Conflitos de Agenda', value: conflicts.length, color: '#ff4d4f' },
+    { title: 'Recursos Alocados', value: resources.filter(r => r.availability).length, color: '#13c2c2' },
+  ];
+
+  // Mock data for calendar sources
+  const calendarSources = [
+    { name: 'Outlook', value: 45, color: '#0078d4' },
+    { name: 'Google Calendar', value: 35, color: '#4285f4' },
+    { name: 'Manual', value: 15, color: '#52c41a' },
+    { name: 'Outros', value: 5, color: '#fa8c16' },
+  ];
+
+  // Mock data for executive schedule
+  const executiveSchedule = currentTenant ? 
+    meetings.map((meeting, index) => ({
+      name: meeting.executive,
+      meetings: index + 1,
+      travelTime: (index + 1) * 15,
+      availability: 100 - ((index + 1) * 10),
+      nextMeeting: `${meeting.time} - ${meeting.title}`
+    })) :
+    [
+      { 
+        name: 'CEO Maria Silva', 
+        meetings: 8, 
+        travelTime: 120, 
+        availability: 85,
+        nextMeeting: '09:00 - Reunião Estratégica Q1 2025'
+      },
+      { 
+        name: 'CFO Pedro Almeida', 
+        meetings: 6, 
+        travelTime: 90, 
+        availability: 92,
+        nextMeeting: '14:00 - Briefing Financeiro'
+      },
+      { 
+        name: 'CMO João Santos', 
+        meetings: 5, 
+        travelTime: 60, 
+        availability: 78,
+        nextMeeting: '10:30 - Reunião Marketing'
+      },
+      { 
+        name: 'Diretor Jurídico Carlos Lima', 
+        meetings: 4, 
+        travelTime: 45, 
+        availability: 88,
+        nextMeeting: '15:00 - Alinhamento Jurídico'
+      },
+      { 
+        name: 'CHRO Fernanda Brito', 
+        meetings: 3, 
+        travelTime: 30, 
+        availability: 95,
+        nextMeeting: '11:00 - Reunião RH'
+      },
+    ];
 
   const eventColumns = [
     {
@@ -94,14 +185,14 @@ const AgendaPage: React.FC = () => {
     },
     {
       title: 'Horário',
-      dataIndex: 'start',
-      key: 'start',
-      render: (date: Date) => (
+      dataIndex: 'time',
+      key: 'time',
+      render: (time: string) => (
         <div>
-          <Text>{format(date, 'HH:mm')}</Text>
+          <Text>{time}</Text>
           <br />
           <Text type="secondary" style={{ fontSize: '12px' }}>
-            {format(date, 'dd/MM', { locale: ptBR })}
+            Hoje
           </Text>
         </div>
       ),
@@ -113,7 +204,7 @@ const AgendaPage: React.FC = () => {
       render: (location: string) => (
         <Space>
           <EnvironmentOutlined />
-          <Text>{location}</Text>
+          <Text>{location || 'Sala de Reuniões'}</Text>
         </Space>
       ),
     },
@@ -122,8 +213,8 @@ const AgendaPage: React.FC = () => {
       dataIndex: 'source',
       key: 'source',
       render: (source: string) => (
-        <Tag color={getSourceColor(source)} icon={<SyncOutlined />}>
-          {source}
+        <Tag color={getSourceColor(source || 'Manual')} icon={<SyncOutlined />}>
+          {source || 'Manual'}
         </Tag>
       ),
     },
@@ -132,7 +223,7 @@ const AgendaPage: React.FC = () => {
       dataIndex: 'status',
       key: 'status',
       render: (status: string) => (
-        <Badge status={getStatusColor(status) as any} text={status} />
+        <Badge status={getStatusColor(status || 'confirmed') as any} text={status || 'confirmed'} />
       ),
     },
     {
@@ -140,7 +231,7 @@ const AgendaPage: React.FC = () => {
       dataIndex: 'priority',
       key: 'priority',
       render: (priority: string) => (
-        <Tag color={getPriorityColor(priority)}>{priority}</Tag>
+        <Tag color={getPriorityColor(priority || 'Média')}>{priority || 'Média'}</Tag>
       ),
     },
     {
@@ -229,6 +320,41 @@ const AgendaPage: React.FC = () => {
     ],
   });
 
+  const handleOptimizeSchedule = async () => {
+    setOptimizationLoading(true);
+    try {
+      const result = await resolveConflicts();
+      message.success('Agenda otimizada com sucesso!');
+      if (result && result.suggestions) {
+        console.log('Sugestões de otimização:', result.suggestions);
+      }
+    } catch (error) {
+      message.error('Falha ao otimizar agenda');
+    } finally {
+      setOptimizationLoading(false);
+    }
+  };
+
+  const handleAllocateResources = async () => {
+    setOptimizationLoading(true);
+    try {
+      await allocateResources();
+      message.success('Recursos alocados com sucesso!');
+    } catch (error) {
+      message.error('Falha ao alocar recursos');
+    } finally {
+      setOptimizationLoading(false);
+    }
+  };
+
+  if (isLoading || dataLoading || schedulingLoading) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', minHeight: 300 }}>
+        <Spin size="large" />
+      </div>
+    );
+  }
+
   return (
     <div>
       <Row justify="space-between" align="middle" style={{ marginBottom: 24 }}>
@@ -243,12 +369,91 @@ const AgendaPage: React.FC = () => {
             <Button type="primary" icon={<PlusOutlined />}>
               Nova Reunião
             </Button>
-            <Button icon={<SyncOutlined />}>
-              Sincronizar
+            <Button 
+              icon={<SyncOutlined />} 
+              onClick={handleOptimizeSchedule}
+              loading={optimizationLoading}
+            >
+              Otimizar Agenda
+            </Button>
+            <Button 
+              icon={<EnvironmentOutlined />} 
+              onClick={handleAllocateResources}
+              loading={optimizationLoading}
+            >
+              Alocar Recursos
             </Button>
           </Space>
         </Col>
       </Row>
+
+      {/* Alerta de conflitos */}
+      {conflicts.length > 0 && (
+        <Alert
+          message={
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <WarningOutlined />
+              <span>{conflicts.length} conflito(s) de agenda detectado(s)</span>
+            </div>
+          }
+          description={`Há ${conflicts.length} conflito(s) de agenda que precisam ser resolvidos. Clique em "Otimizar Agenda" para resolver automaticamente.`}
+          type="warning"
+          showIcon
+          action={
+            <Button 
+              size="small" 
+              type="primary"
+              onClick={handleOptimizeSchedule}
+              loading={optimizationLoading}
+            >
+              Resolver
+            </Button>
+          }
+          style={{ marginBottom: 24 }}
+        />
+      )}
+
+      {/* Alerta de sugestões */}
+      {suggestions.length > 0 && conflicts.length === 0 && (
+        <Alert
+          message={
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <CheckCircleOutlined />
+              <span>{suggestions.length} sugestão(ões) de otimização disponível(is)</span>
+            </div>
+          }
+          description="A agenda pode ser otimizada para melhor uso do tempo dos executivos."
+          type="success"
+          showIcon
+          action={
+            <Button 
+              size="small" 
+              type="primary"
+              onClick={handleOptimizeSchedule}
+              loading={optimizationLoading}
+            >
+              Aplicar Sugestões
+            </Button>
+          }
+          style={{ marginBottom: 24 }}
+        />
+      )}
+
+      {/* Alerta de recursos não disponíveis */}
+      {resources.filter(r => !r.availability).length > 0 && (
+        <Alert
+          message={
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <WarningOutlined />
+              <span>{resources.filter(r => !r.availability).length} recurso(s) não disponível(is)</span>
+            </div>
+          }
+          description={`Há ${resources.filter(r => !r.availability).length} recurso(s) necessário(s) que não estão disponíveis. Verifique as sugestões de alternativas.`}
+          type="warning"
+          showIcon
+          style={{ marginBottom: 24 }}
+        />
+      )}
 
       {/* Filtros */}
       <Card style={{ marginBottom: 24 }}>
@@ -380,6 +585,7 @@ const AgendaPage: React.FC = () => {
           dataSource={executiveSchedule}
           pagination={false}
           size="small"
+          loading={dataLoading}
         />
       </Card>
 
@@ -387,10 +593,20 @@ const AgendaPage: React.FC = () => {
       <Card title="Reuniões e Compromissos">
         <Table
           columns={eventColumns}
-          dataSource={filteredEvents}
-          rowKey="id"
+          dataSource={meetings.map((meeting, index) => ({
+            key: meeting.id,
+            title: meeting.title,
+            time: meeting.time,
+            executive: meeting.executive,
+            location: index % 2 === 0 ? 'Sala de Reuniões A' : 'Videoconferência',
+            source: index % 3 === 0 ? 'Outlook' : index % 3 === 1 ? 'Google Calendar' : 'Manual',
+            status: index % 4 === 0 ? 'confirmed' : index % 4 === 1 ? 'tentative' : 'confirmed',
+            priority: index % 3 === 0 ? 'Alta' : index % 3 === 1 ? 'Média' : 'Baixa',
+          }))}
+          rowKey="key"
           pagination={{ pageSize: 10 }}
           size="small"
+          loading={dataLoading}
         />
       </Card>
 
@@ -418,30 +634,29 @@ const AgendaPage: React.FC = () => {
               {selectedEvent.executive}
             </Descriptions.Item>
             <Descriptions.Item label="Data e Hora">
-              {format(selectedEvent.start, 'dd/MM/yyyy HH:mm', { locale: ptBR })} - 
-              {format(selectedEvent.end, 'HH:mm', { locale: ptBR })}
+              Hoje, {selectedEvent.time}
             </Descriptions.Item>
             <Descriptions.Item label="Local">
-              {selectedEvent.location}
+              Sala de Reuniões
             </Descriptions.Item>
             <Descriptions.Item label="Fonte">
-              <Tag color={getSourceColor(selectedEvent.source)}>
-                {selectedEvent.source}
+              <Tag color={getSourceColor('Manual')}>
+                Manual
               </Tag>
             </Descriptions.Item>
             <Descriptions.Item label="Status">
-              <Badge status={getStatusColor(selectedEvent.status) as any} text={selectedEvent.status} />
+              <Badge status={getStatusColor('confirmed') as any} text="confirmed" />
             </Descriptions.Item>
             <Descriptions.Item label="Prioridade">
-              <Tag color={getPriorityColor(selectedEvent.priority)}>
-                {selectedEvent.priority}
+              <Tag color={getPriorityColor('Média')}>
+                Média
               </Tag>
             </Descriptions.Item>
             <Descriptions.Item label="Participantes">
-              {selectedEvent.attendees.join(', ')}
+              Participantes da reunião
             </Descriptions.Item>
             <Descriptions.Item label="Descrição">
-              {selectedEvent.description}
+              Descrição da reunião
             </Descriptions.Item>
           </Descriptions>
         )}

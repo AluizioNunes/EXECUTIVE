@@ -1,14 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { Layout, Menu, theme, Avatar, Dropdown, Typography, Badge, Tooltip } from 'antd';
-import { HomeOutlined, CalendarOutlined, GlobalOutlined, FileTextOutlined, BlockOutlined, ProjectOutlined, TeamOutlined, RobotOutlined, DollarOutlined, UserOutlined, SettingOutlined, LogoutOutlined, BellOutlined } from '@ant-design/icons';
+import { Layout, Menu, theme, Avatar, Dropdown, Typography, Badge, Tooltip, Select } from 'antd';
+import { HomeOutlined, CalendarOutlined, GlobalOutlined, FileTextOutlined, BlockOutlined, ProjectOutlined, TeamOutlined, RobotOutlined, DollarOutlined, UserOutlined, SettingOutlined, LogoutOutlined, BellOutlined, BarChartOutlined } from '@ant-design/icons';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { format, differenceInMinutes } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { userData } from './data/mockData';
+import { useTenant } from './contexts/TenantContext';
 
 const { Header, Content, Footer, Sider } = Layout;
 const { Text } = Typography;
+const { Option } = Select;
 
 const menuItems = [
   { key: '/', icon: <HomeOutlined />, label: 'Início' },
@@ -20,6 +22,7 @@ const menuItems = [
   { key: '/projects', icon: <ProjectOutlined />, label: 'Projetos' },
   { key: '/financial', icon: <DollarOutlined />, label: 'Financeiro' },
   { key: '/stakeholders', icon: <TeamOutlined />, label: 'Stakeholders' },
+  { key: '/analytics', icon: <BarChartOutlined />, label: 'Analytics' },
   { key: '/ai-assistant', icon: <RobotOutlined />, label: 'Assistente IA' },
 ];
 
@@ -29,6 +32,7 @@ const AppLayout: React.FC = () => {
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);
   const [sessionTime, setSessionTime] = useState(0);
+  const { currentTenant, tenants, switchTenant } = useTenant();
 
   const handleMenuClick = (e: { key: string }) => {
     navigate(e.key);
@@ -90,6 +94,10 @@ const AppLayout: React.FC = () => {
         console.log('Fazer logout');
         break;
     }
+  };
+
+  const handleTenantChange = (tenantId: number) => {
+    switchTenant(tenantId);
   };
 
   const siderWidth = collapsed ? 80 : 256;
@@ -169,6 +177,22 @@ const AppLayout: React.FC = () => {
             gap: '24px',
             height: '100%'
           }}>
+            {/* Tenant Selector */}
+            {currentTenant && (
+              <Select
+                value={currentTenant.id}
+                style={{ width: 200 }}
+                onChange={handleTenantChange}
+                size="middle"
+              >
+                {tenants.map(tenant => (
+                  <Option key={tenant.id} value={tenant.id}>
+                    {tenant.name}
+                  </Option>
+                ))}
+              </Select>
+            )}
+            
             <Tooltip title="Notificações">
               <Badge count={3} size="small">
                 <BellOutlined style={{ fontSize: '18px', cursor: 'pointer' }} />
