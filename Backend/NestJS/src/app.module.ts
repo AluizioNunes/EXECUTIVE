@@ -34,7 +34,7 @@ import { EncryptedFieldSubscriber } from './common/decorators/encrypted-field.de
       username: 'postgres',
       password: 'postgres',
       database: 'executive_secretariat',
-      entities: [Tenant, User, Executive, Meeting, Task, Company, Document],
+      entities: [Tenant, User, Executive, Meeting, Task, Company, Document, AuditLog],
       synchronize: true, // Only for development
       subscribers: [TenantSubscriber],
     }),
@@ -49,6 +49,7 @@ import { EncryptedFieldSubscriber } from './common/decorators/encrypted-field.de
     NotificationsModule,
     DocumentsModule,
     CommonModule,
+    AuditModule,
   ],
   controllers: [AppController],
   providers: [AppService, TenantSubscriber, EncryptedFieldSubscriber],
