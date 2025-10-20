@@ -1,4 +1,4 @@
-FROM node:20-alpine as frontend-builder
+FROM node:20-alpine as builder
 
 WORKDIR /app
 
@@ -12,34 +12,15 @@ COPY . .
 # Build the frontend application
 RUN npm run build
 
-# Backend builder stage
-FROM node:18-alpine AS backend-builder
-
-WORKDIR /app
-
-# Copy backend files
-COPY ./Backend/NestJS/package*.json ./
-RUN npm ci --only=production && npm cache clean --force
-
-COPY ./Backend/NestJS .
-RUN npm run build
-
 # Production stage
-FROM node:18-alpine
+FROM nginx:alpine
 
-WORKDIR /app
+# Copy built assets from builder stage
+COPY --from=builder /app/dist /usr/share/nginx/html
 
-# Copy backend dependencies
-COPY --from=backend-builder /app/package*.json ./
-RUN npm ci --only=production && npm cache clean --force
+# Copy custom nginx configuration if needed
+# COPY nginx.conf /etc/nginx/nginx.conf
 
-# Copy backend built files
-COPY --from=backend-builder /app/dist ./dist
-COPY --from=backend-builder /app/node_modules ./node_modules
+EXPOSE 80
 
-# Copy frontend built assets
-COPY --from=frontend-builder /app/dist ./frontend
-
-EXPOSE 3000 80
-
-CMD ["node", "dist/main.js"]
+CMD ["nginx", "-g", "daemon off;"]

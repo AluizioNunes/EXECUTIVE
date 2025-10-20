@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Layout, Menu, theme, Avatar, Dropdown, Typography, Badge, Tooltip, Select } from 'antd';
-import { HomeOutlined, CalendarOutlined, GlobalOutlined, FileTextOutlined, BlockOutlined, ProjectOutlined, TeamOutlined, RobotOutlined, DollarOutlined, UserOutlined, SettingOutlined, LogoutOutlined, BellOutlined, BarChartOutlined } from '@ant-design/icons';
+import { HomeOutlined, CalendarOutlined, GlobalOutlined, FileTextOutlined, BlockOutlined, ProjectOutlined, TeamOutlined, RobotOutlined, DollarOutlined, UserOutlined, SettingOutlined, LogoutOutlined, BellOutlined, BarChartOutlined, AppstoreOutlined } from '@ant-design/icons';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { format, differenceInMinutes } from 'date-fns';
@@ -13,17 +13,37 @@ const { Text } = Typography;
 const { Option } = Select;
 
 const menuItems = [
-  { key: '/', icon: <HomeOutlined />, label: 'Início' },
-  { key: '/agenda', icon: <CalendarOutlined />, label: 'Agenda Global' },
-  { key: '/travel', icon: <GlobalOutlined />, label: 'Viagens' },
-  { key: '/documents', icon: <FileTextOutlined />, label: 'Documentos' },
-  { key: '/governance', icon: <BlockOutlined />, label: 'Governança' },
-  { key: '/tasks', icon: <ProjectOutlined />, label: 'Tarefas' },
-  { key: '/projects', icon: <ProjectOutlined />, label: 'Projetos' },
-  { key: '/financial', icon: <DollarOutlined />, label: 'Financeiro' },
-  { key: '/stakeholders', icon: <TeamOutlined />, label: 'Stakeholders' },
-  { key: '/analytics', icon: <BarChartOutlined />, label: 'Analytics' },
-  { key: '/ai-assistant', icon: <RobotOutlined />, label: 'Assistente IA' },
+  { key: '/', icon: <HomeOutlined />, label: 'INICIO' },
+  {
+    key: '/cadastros',
+    icon: <AppstoreOutlined />,
+    label: 'CADASTROS',
+    children: [
+      { key: '/cadastros/pf', label: 'PF - PESSOA FÍSICA' },
+      { key: '/cadastros/pj', label: 'PJ - PESSOA JURÍDICA' },
+      { key: '/cadastros/funcao', label: 'FUNÇÃO' },
+    ],
+  },
+  { key: '/agenda', icon: <CalendarOutlined />, label: 'AGENDA GLOBAL' },
+  { key: '/travel', icon: <GlobalOutlined />, label: 'VIAGENS' },
+  { key: '/documents', icon: <FileTextOutlined />, label: 'DOCUMENTOS' },
+  { key: '/governance', icon: <BlockOutlined />, label: 'GOVERNANÇA' },
+  { key: '/tasks', icon: <ProjectOutlined />, label: 'TAREFAS' },
+  { key: '/projects', icon: <ProjectOutlined />, label: 'PROJETOS' },
+  { key: '/financial', icon: <DollarOutlined />, label: 'FINANCEIRO' },
+  { key: '/stakeholders', icon: <TeamOutlined />, label: 'STAKEHOLDERS' },
+  { key: '/analytics', icon: <BarChartOutlined />, label: 'ANALYTICS' },
+  { key: '/ai-assistant', icon: <RobotOutlined />, label: 'ASSISTENTE IA' },
+  {
+    key: '/sistema',
+    icon: <SettingOutlined />,
+    label: 'SISTEMA',
+    children: [
+      { key: '/sistema/usuario', label: 'USUARIO' },
+      { key: '/sistema/perfil', label: 'PERFIL' },
+      { key: '/sistema/permissoes', label: 'PERMISSÕES' },
+    ],
+  },
 ];
 
 const AppLayout: React.FC = () => {
@@ -134,7 +154,8 @@ const AppLayout: React.FC = () => {
         </div>
         <Menu 
           theme="dark" 
-          defaultSelectedKeys={[location.pathname]} 
+          selectedKeys={[location.pathname]} 
+          defaultOpenKeys={["/cadastros", "/sistema"]}
           mode="inline" 
           items={menuItems} 
           onClick={handleMenuClick}

@@ -12,6 +12,11 @@ import FinancialPage from './pages/FinancialPage';
 import StakeholdersPage from './pages/StakeholdersPage';
 import AIAssistantPage from './pages/AIAssistantPage';
 import AnalyticsPage from './pages/AnalyticsPage';
+import Perfil from './pages/Perfil';
+import PF from './pages/PF';
+import PJ from './pages/PJ';
+import UsuarioPage from './pages/UsuarioPage';
+import PermissoesPage from './pages/PermissoesPage';
 
 // Wrapper components para passar tenant para as páginas
 const TenantAwarePageWrapper: React.FC<{ Component: React.ComponentType }> = ({ Component }) => {
@@ -35,6 +40,13 @@ const router = createBrowserRouter([
       { path: 'stakeholders', element: <TenantAwarePageWrapper Component={StakeholdersPage} /> },
       { path: 'ai-assistant', element: <TenantAwarePageWrapper Component={AIAssistantPage} /> },
       { path: 'analytics', element: <TenantAwarePageWrapper Component={AnalyticsPage} /> },
+      // Novas rotas de CADASTROS e SISTEMA
+      { path: 'cadastros/pf', element: <TenantAwarePageWrapper Component={PF} /> },
+      { path: 'cadastros/pj', element: <TenantAwarePageWrapper Component={PJ} /> },
+      { path: 'cadastros/funcao', element: <TenantAwarePageWrapper Component={Perfil} /> },
+      { path: 'sistema/usuario', element: <TenantAwarePageWrapper Component={UsuarioPage} /> },
+      { path: 'sistema/perfil', element: <TenantAwarePageWrapper Component={Perfil} /> },
+      { path: 'sistema/permissoes', element: <TenantAwarePageWrapper Component={PermissoesPage} /> },
     ],
   },
   // Rotas específicas por tenant (opcional)
@@ -53,6 +65,13 @@ const router = createBrowserRouter([
       { path: 'stakeholders', element: <TenantAwarePageWrapper Component={StakeholdersPage} /> },
       { path: 'ai-assistant', element: <TenantAwarePageWrapper Component={AIAssistantPage} /> },
       { path: 'analytics', element: <TenantAwarePageWrapper Component={AnalyticsPage} /> },
+      // Novas rotas de CADASTROS e SISTEMA por tenant
+      { path: 'cadastros/pf', element: <TenantAwarePageWrapper Component={PF} /> },
+      { path: 'cadastros/pj', element: <TenantAwarePageWrapper Component={PJ} /> },
+      { path: 'cadastros/funcao', element: <TenantAwarePageWrapper Component={Perfil} /> },
+      { path: 'sistema/usuario', element: <TenantAwarePageWrapper Component={UsuarioPage} /> },
+      { path: 'sistema/perfil', element: <TenantAwarePageWrapper Component={Perfil} /> },
+      { path: 'sistema/permissoes', element: <TenantAwarePageWrapper Component={PermissoesPage} /> },
     ],
   },
 ]);
