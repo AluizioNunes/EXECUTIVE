@@ -1,27 +1,37 @@
 import React from 'react';
-import { createBrowserRouter, RouterProvider } from 'react-router-dom';
+import { Navigate, Outlet, createBrowserRouter, RouterProvider } from 'react-router-dom';
 import AppLayout from './App';
-import HomePage from './pages/HomePage';
-import AgendaPage from './pages/AgendaPage';
-import TravelPage from './pages/TravelPage';
-import DocumentsPage from './pages/DocumentsPage';
-import GovernancePage from './pages/GovernancePage';
-import TasksPage from './pages/TasksPage';
-import ProjectsPage from './pages/ProjectsPage';
-import FinancialPage from './pages/FinancialPage';
-import StakeholdersPage from './pages/StakeholdersPage';
-import AIAssistantPage from './pages/AIAssistantPage';
-import AnalyticsPage from './pages/AnalyticsPage';
+import HomePage from './pages/Home';
+import AgendaPage from './pages/Agenda';
+import TravelPage from './pages/Travel';
+import DocumentsPage from './pages/Documents';
+import GovernancePage from './pages/Governance';
+import TasksPage from './pages/Tasks';
+import ProjectsPage from './pages/Projects';
+import FinancialPage from './pages/Financial';
+import StakeholdersPage from './pages/Stakeholders';
+import AIAssistantPage from './pages/AIAssistant';
+import AnalyticsPage from './pages/Analytics';
 import Perfil from './pages/Perfil';
 import PF from './pages/PF';
 import PJ from './pages/PJ';
-import UsuarioPage from './pages/UsuarioPage';
-import PermissoesPage from './pages/PermissoesPage';
+import UsuarioPage from './pages/Usuario';
+import PermissoesPage from './pages/Permissoes';
+import Empresas from './pages/Empresas';
+import Contas from './pages/Contas.tsx';
+import ContasPagar from './pages/ContasPagar.tsx';
+import ExecutivosPage from './pages/Executivos';
+import Ativos from './pages/Ativos';
+import CentroCustos from './pages/CentroCustos';
 
 // Wrapper components para passar tenant para as páginas
 const TenantAwarePageWrapper: React.FC<{ Component: React.ComponentType }> = ({ Component }) => {
   // O tenant já está disponível através do contexto TenantContext
   return <Component />;
+};
+
+const FinancialWrapper: React.FC = () => {
+  return <Outlet />;
 };
 
 const router = createBrowserRouter([
@@ -36,7 +46,17 @@ const router = createBrowserRouter([
       { path: 'governance', element: <TenantAwarePageWrapper Component={GovernancePage} /> },
       { path: 'tasks', element: <TenantAwarePageWrapper Component={TasksPage} /> },
       { path: 'projects', element: <TenantAwarePageWrapper Component={ProjectsPage} /> },
-      { path: 'financial', element: <TenantAwarePageWrapper Component={FinancialPage} /> },
+      {
+        path: 'financial',
+        element: <FinancialWrapper />,
+        children: [
+          { index: true, element: <Navigate to="contas" replace /> },
+          { path: 'contas-a-pagar', element: <TenantAwarePageWrapper Component={ContasPagar} /> },
+          { path: 'contas-a-receber', element: <TenantAwarePageWrapper Component={FinancialPage} /> },
+          { path: 'contas', element: <TenantAwarePageWrapper Component={Contas} /> },
+          { path: 'centro-de-custos', element: <TenantAwarePageWrapper Component={CentroCustos} /> },
+        ],
+      },
       { path: 'stakeholders', element: <TenantAwarePageWrapper Component={StakeholdersPage} /> },
       { path: 'ai-assistant', element: <TenantAwarePageWrapper Component={AIAssistantPage} /> },
       { path: 'analytics', element: <TenantAwarePageWrapper Component={AnalyticsPage} /> },
@@ -44,9 +64,12 @@ const router = createBrowserRouter([
       { path: 'cadastros/pf', element: <TenantAwarePageWrapper Component={PF} /> },
       { path: 'cadastros/pj', element: <TenantAwarePageWrapper Component={PJ} /> },
       { path: 'cadastros/funcao', element: <TenantAwarePageWrapper Component={Perfil} /> },
+      { path: 'cadastros/executivos', element: <TenantAwarePageWrapper Component={ExecutivosPage} /> },
+      { path: 'cadastros/ativos', element: <TenantAwarePageWrapper Component={Ativos} /> },
       { path: 'sistema/usuario', element: <TenantAwarePageWrapper Component={UsuarioPage} /> },
       { path: 'sistema/perfil', element: <TenantAwarePageWrapper Component={Perfil} /> },
       { path: 'sistema/permissoes', element: <TenantAwarePageWrapper Component={PermissoesPage} /> },
+      { path: 'sistema/empresas', element: <TenantAwarePageWrapper Component={Empresas} /> },
     ],
   },
   // Rotas específicas por tenant (opcional)
@@ -61,7 +84,17 @@ const router = createBrowserRouter([
       { path: 'governance', element: <TenantAwarePageWrapper Component={GovernancePage} /> },
       { path: 'tasks', element: <TenantAwarePageWrapper Component={TasksPage} /> },
       { path: 'projects', element: <TenantAwarePageWrapper Component={ProjectsPage} /> },
-      { path: 'financial', element: <TenantAwarePageWrapper Component={FinancialPage} /> },
+      {
+        path: 'financial',
+        element: <FinancialWrapper />,
+        children: [
+          { index: true, element: <Navigate to="contas" replace /> },
+          { path: 'contas-a-pagar', element: <TenantAwarePageWrapper Component={ContasPagar} /> },
+          { path: 'contas-a-receber', element: <TenantAwarePageWrapper Component={FinancialPage} /> },
+          { path: 'contas', element: <TenantAwarePageWrapper Component={Contas} /> },
+          { path: 'centro-de-custos', element: <TenantAwarePageWrapper Component={CentroCustos} /> },
+        ],
+      },
       { path: 'stakeholders', element: <TenantAwarePageWrapper Component={StakeholdersPage} /> },
       { path: 'ai-assistant', element: <TenantAwarePageWrapper Component={AIAssistantPage} /> },
       { path: 'analytics', element: <TenantAwarePageWrapper Component={AnalyticsPage} /> },
@@ -69,15 +102,18 @@ const router = createBrowserRouter([
       { path: 'cadastros/pf', element: <TenantAwarePageWrapper Component={PF} /> },
       { path: 'cadastros/pj', element: <TenantAwarePageWrapper Component={PJ} /> },
       { path: 'cadastros/funcao', element: <TenantAwarePageWrapper Component={Perfil} /> },
+      { path: 'cadastros/executivos', element: <TenantAwarePageWrapper Component={ExecutivosPage} /> },
+      { path: 'cadastros/ativos', element: <TenantAwarePageWrapper Component={Ativos} /> },
       { path: 'sistema/usuario', element: <TenantAwarePageWrapper Component={UsuarioPage} /> },
       { path: 'sistema/perfil', element: <TenantAwarePageWrapper Component={Perfil} /> },
       { path: 'sistema/permissoes', element: <TenantAwarePageWrapper Component={PermissoesPage} /> },
+      { path: 'sistema/empresas', element: <TenantAwarePageWrapper Component={Empresas} /> },
     ],
   },
 ]);
 
 const AppRoutes: React.FC = () => {
-  return <RouterProvider router={router} />;
+  return <RouterProvider router={router} future={{ v7_startTransition: true }} />;
 };
 
 export default AppRoutes;

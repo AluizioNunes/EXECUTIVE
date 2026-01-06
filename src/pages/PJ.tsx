@@ -1,7 +1,8 @@
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Card, Table, Button, Space, Tag, Modal, message, Input } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import PJModal from '../components/PJModal';
+import { useTenant } from '../contexts/TenantContext';
 
 export type PessoaJuridica = {
   id: number;
@@ -15,13 +16,14 @@ export type PessoaJuridica = {
   cidade?: string;
   estado?: string;
   pais?: string;
+  empresaId: number;
   ativo: boolean;
 };
 
 const initialPJs: PessoaJuridica[] = [
-  { id: 1, razaoSocial: 'Alfa Consultoria Ltda', nomeFantasia: 'Alfa', cnpj: '12345678000199', email: 'contato@alfaconsultoria.com', telefone: '(11) 99999-1001', ativo: true, inscricaoEstadual: '123.456.789.000', endereco: 'Av. Paulista, 1000', cidade: 'São Paulo', estado: 'SP', pais: 'Brasil' },
-  { id: 2, razaoSocial: 'Beta Tech S/A', nomeFantasia: 'Beta Tech', cnpj: '98765432000155', email: 'ti@betatech.com', telefone: '(11) 99999-1002', ativo: true, endereco: 'Rua das Flores, 200', cidade: 'Campinas', estado: 'SP', pais: 'Brasil' },
-  { id: 3, razaoSocial: 'Gamma Serviços ME', nomeFantasia: 'Gamma', cnpj: '11122233000177', email: 'financeiro@gammaservicos.com', telefone: '(11) 99999-1003', ativo: false, endereco: 'Rua A, 50', cidade: 'Curitiba', estado: 'PR', pais: 'Brasil' },
+  { id: 1, razaoSocial: 'Alfa Consultoria Ltda', nomeFantasia: 'Alfa', cnpj: '12345678000199', email: 'contato@alfaconsultoria.com', telefone: '(11) 99999-1001', ativo: true, inscricaoEstadual: '123.456.789.000', endereco: 'Av. Paulista, 1000', cidade: 'São Paulo', estado: 'SP', pais: 'Brasil', empresaId: 1 },
+  { id: 2, razaoSocial: 'Beta Tech S/A', nomeFantasia: 'Beta Tech', cnpj: '98765432000155', email: 'ti@betatech.com', telefone: '(11) 99999-1002', ativo: true, endereco: 'Rua das Flores, 200', cidade: 'Campinas', estado: 'SP', pais: 'Brasil', empresaId: 1 },
+  { id: 3, razaoSocial: 'Gamma Serviços ME', nomeFantasia: 'Gamma', cnpj: '11122233000177', email: 'financeiro@gammaservicos.com', telefone: '(11) 99999-1003', ativo: false, endereco: 'Rua A, 50', cidade: 'Curitiba', estado: 'PR', pais: 'Brasil', empresaId: 1 },
 ];
 
 const onlyDigits = (s: string) => s.replace(/\D/g, '');
@@ -34,20 +36,69 @@ const formatCNPJ = (s: string) => {
   return `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8, 12)}-${d.slice(12, 14)}`;
 };
 
-const loadPJ = (): PessoaJuridica[] => {
+const tenantStorageKey = (tenantId: number | undefined, baseKey: string) =>
+  tenantId ? `${tenantId}_${baseKey}` : baseKey;
+
+const migrateToTenantKey = (tenantId: number | undefined, baseKey: string) => {
+  if (!tenantId) return;
   try {
-    const raw = localStorage.getItem('pj_list');
-    return raw ? JSON.parse(raw) : initialPJs;
+    const tenantKey = tenantStorageKey(tenantId, baseKey);
+    const tenantRaw = localStorage.getItem(tenantKey);
+    if (tenantRaw) return;
+    const legacyRaw = localStorage.getItem(baseKey);
+    if (!legacyRaw) return;
+    localStorage.setItem(tenantKey, legacyRaw);
+    localStorage.removeItem(baseKey);
+  } catch {}
+};
+
+const normalizePJList = (tenantId: number | undefined, list: any[]): PessoaJuridica[] => {
+  const empresaFallback = Number.isFinite(Number(tenantId)) ? Number(tenantId) : 0;
+  return list
+    .filter((p) => p && Number.isFinite(Number(p.id)))
+    .map((p) => ({
+      id: Number(p.id),
+      razaoSocial: String(p.razaoSocial ?? ''),
+      nomeFantasia: p.nomeFantasia ? String(p.nomeFantasia) : undefined,
+      cnpj: String(p.cnpj ?? ''),
+      inscricaoEstadual: p.inscricaoEstadual ? String(p.inscricaoEstadual) : undefined,
+      email: String(p.email ?? ''),
+      telefone: p.telefone ? String(p.telefone) : undefined,
+      endereco: p.endereco ? String(p.endereco) : undefined,
+      cidade: p.cidade ? String(p.cidade) : undefined,
+      estado: p.estado ? String(p.estado) : undefined,
+      pais: p.pais ? String(p.pais) : undefined,
+      empresaId: Number.isFinite(Number(p.empresaId)) ? Number(p.empresaId) : empresaFallback,
+      ativo: Boolean(p.ativo),
+    }));
+};
+
+const loadPJ = (tenantId: number | undefined): PessoaJuridica[] => {
+  migrateToTenantKey(tenantId, 'pj_list');
+  try {
+    const raw = localStorage.getItem(tenantStorageKey(tenantId, 'pj_list'));
+    if (!raw) return initialPJs.map((p) => ({ ...p, empresaId: Number(tenantId ?? p.empresaId) }));
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? normalizePJList(tenantId, parsed) : [];
   } catch {
     return initialPJs;
   }
 };
 
 const PJ: React.FC = () => {
-  const [data, setData] = useState<PessoaJuridica[]>(loadPJ());
+  const { currentTenant } = useTenant();
+  const tenantId = currentTenant?.id;
+
+  const [data, setData] = useState<PessoaJuridica[]>(() => loadPJ(tenantId));
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<PessoaJuridica | null>(null);
   const [search, setSearch] = useState('');
+
+  useEffect(() => {
+    setData(loadPJ(tenantId));
+    setEditing(null);
+    setModalOpen(false);
+  }, [tenantId]);
 
   const filteredData = useMemo(() => {
     const s = search.toLowerCase();
@@ -68,17 +119,18 @@ const PJ: React.FC = () => {
   };
 
   const handleSalvar = (values: Omit<PessoaJuridica, 'id'> & Partial<Pick<PessoaJuridica, 'id'>>) => {
+    const empresaId = Number(tenantId ?? values.empresaId);
     let newData: PessoaJuridica[];
     if (editing) {
-      newData = data.map(p => p.id === editing.id ? { ...(editing as PessoaJuridica), ...values, id: editing.id } : p);
+      newData = data.map(p => p.id === editing.id ? { ...(editing as PessoaJuridica), ...values, empresaId, id: editing.id } : p);
       message.success('PJ atualizada com sucesso');
     } else {
       const newId = Math.max(0, ...data.map(p => p.id)) + 1;
-      newData = [...data, { ...values, id: newId } as PessoaJuridica];
+      newData = [...data, { ...values, empresaId, id: newId } as PessoaJuridica];
       message.success('PJ criada com sucesso');
     }
     setData(newData);
-    try { localStorage.setItem('pj_list', JSON.stringify(newData)); } catch {}
+    try { localStorage.setItem(tenantStorageKey(tenantId, 'pj_list'), JSON.stringify(newData)); } catch {}
     setModalOpen(false);
     setEditing(null);
   };
@@ -98,7 +150,7 @@ const PJ: React.FC = () => {
       onOk: () => {
         const newData = data.filter(p => p.id !== record.id);
         setData(newData);
-        try { localStorage.setItem('pj_list', JSON.stringify(newData)); } catch {}
+        try { localStorage.setItem(tenantStorageKey(tenantId, 'pj_list'), JSON.stringify(newData)); } catch {}
         message.success('PJ excluída');
       }
     });
@@ -120,7 +172,7 @@ const PJ: React.FC = () => {
         </Space>
       </Space>
 
-      <Card bordered={false}>
+      <Card variant="borderless">
         <Table<PessoaJuridica>
           rowKey="id"
           dataSource={filteredData}

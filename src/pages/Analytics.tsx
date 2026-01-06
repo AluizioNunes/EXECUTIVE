@@ -41,7 +41,7 @@ const AnalyticsPage: React.FC = () => {
     if (currentTenant && !isLoading) {
       fetchAllAnalytics();
     }
-  }, [currentTenant, isLoading]);
+  }, [currentTenant, isLoading, fetchAllAnalytics]);
 
   // Opções para gráfico de produtividade
   const getProductivityChartOption = () => ({

@@ -1,8 +1,9 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Card, Typography, Row, Col, Tag, List, Button, Space, Modal, message } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import { userData } from '../data/mockData';
 import FuncaoModal from '../components/FuncaoModal';
+import { useTenant } from '../contexts/TenantContext';
 
 const { Title, Text } = Typography;
 
@@ -21,10 +22,54 @@ const initialFuncoes: Funcao[] = [
   { id: 4, nome: 'Analista de Tarefas', descricao: 'Gestão de tarefas executivas', ativo: false, permissoes: ['tasks'] },
 ];
 
+const tenantStorageKey = (tenantId: number | undefined, baseKey: string) =>
+  tenantId ? `${tenantId}_${baseKey}` : baseKey;
+
+const migrateToTenantKey = (tenantId: number | undefined, baseKey: string) => {
+  if (!tenantId) return;
+  try {
+    const tenantKey = tenantStorageKey(tenantId, baseKey);
+    const tenantRaw = localStorage.getItem(tenantKey);
+    if (tenantRaw) return;
+    const legacyRaw = localStorage.getItem(baseKey);
+    if (!legacyRaw) return;
+    localStorage.setItem(tenantKey, legacyRaw);
+    localStorage.removeItem(baseKey);
+  } catch {}
+};
+
+const loadFuncoes = (tenantId: number | undefined): Funcao[] => {
+  migrateToTenantKey(tenantId, 'funcoes_list');
+  try {
+    const raw = localStorage.getItem(tenantStorageKey(tenantId, 'funcoes_list'));
+    if (!raw) return initialFuncoes;
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as Funcao[]) : initialFuncoes;
+  } catch {
+    return initialFuncoes;
+  }
+};
+
 const Perfil: React.FC = () => {
-  const [funcoes, setFuncoes] = useState<Funcao[]>(initialFuncoes);
+  const { currentTenant } = useTenant();
+  const tenantId = currentTenant?.id;
+
+  const [funcoes, setFuncoes] = useState<Funcao[]>(() => loadFuncoes(tenantId));
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Funcao | null>(null);
+
+  useEffect(() => {
+    setFuncoes(loadFuncoes(tenantId));
+    setModalOpen(false);
+    setEditing(null);
+  }, [tenantId]);
+
+  const persist = (next: Funcao[]) => {
+    setFuncoes(next);
+    try {
+      localStorage.setItem(tenantStorageKey(tenantId, 'funcoes_list'), JSON.stringify(next));
+    } catch {}
+  };
 
   const stats = useMemo(() => {
     const total = funcoes.length;
@@ -40,11 +85,11 @@ const Perfil: React.FC = () => {
 
   const handleSalvar = (data: Omit<Funcao, 'id'> & Partial<Pick<Funcao, 'id'>>) => {
     if (editing) {
-      setFuncoes(prev => prev.map(f => f.id === editing.id ? { ...(editing as Funcao), ...data, id: editing.id! } : f));
+      persist(funcoes.map(f => f.id === editing.id ? { ...(editing as Funcao), ...data, id: editing.id! } : f));
       message.success('Função atualizada com sucesso');
     } else {
       const newId = Math.max(0, ...funcoes.map(f => f.id)) + 1;
-      setFuncoes(prev => [...prev, { ...data, id: newId } as Funcao]);
+      persist([...funcoes, { ...data, id: newId } as Funcao]);
       message.success('Função criada com sucesso');
     }
     setModalOpen(false);
@@ -64,7 +109,7 @@ const Perfil: React.FC = () => {
       okType: 'danger',
       cancelText: 'Cancelar',
       onOk: () => {
-        setFuncoes(prev => prev.filter(f => f.id !== funcao.id));
+        persist(funcoes.filter(f => f.id !== funcao.id));
         message.success('Função excluída');
       }
     });
@@ -102,7 +147,7 @@ const Perfil: React.FC = () => {
         </Col>
       </Row>
 
-      <Card title="Funções Cadastradas" bordered={false}>
+      <Card title="Funções Cadastradas" variant="borderless">
         <List
           grid={{ gutter: 16, column: 3 }}
           dataSource={funcoes}

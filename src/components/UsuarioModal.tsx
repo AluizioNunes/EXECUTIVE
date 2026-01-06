@@ -1,6 +1,23 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Modal, Form, Input, Select, Switch } from 'antd';
 import type { PessoaFisica } from '../pages/PF';
+import { useTenant } from '../contexts/TenantContext';
+
+const tenantStorageKey = (tenantId: number | undefined, baseKey: string) =>
+  tenantId ? `${tenantId}_${baseKey}` : baseKey;
+
+const migrateToTenantKey = (tenantId: number | undefined, baseKey: string) => {
+  if (!tenantId) return;
+  try {
+    const tenantKey = tenantStorageKey(tenantId, baseKey);
+    const tenantRaw = localStorage.getItem(tenantKey);
+    if (tenantRaw) return;
+    const legacyRaw = localStorage.getItem(baseKey);
+    if (!legacyRaw) return;
+    localStorage.setItem(tenantKey, legacyRaw);
+    localStorage.removeItem(baseKey);
+  } catch {}
+};
 
 interface UsuarioModalProps {
   open: boolean;
@@ -13,16 +30,19 @@ interface UsuarioModalProps {
 const UsuarioModal: React.FC<UsuarioModalProps> = ({ open, mode = 'create', initialData, onCancel, onSave }) => {
   const [form] = Form.useForm();
   const [pfList, setPfList] = useState<PessoaFisica[]>([]);
+  const { currentTenant } = useTenant();
+  const tenantId = currentTenant?.id;
 
   useEffect(() => {
+    migrateToTenantKey(tenantId, 'pf_list');
     try {
-      const raw = localStorage.getItem('pf_list');
+      const raw = localStorage.getItem(tenantStorageKey(tenantId, 'pf_list'));
       const list = raw ? JSON.parse(raw) : [];
       setPfList(list);
     } catch {
       setPfList([]);
     }
-  }, [open]);
+  }, [open, tenantId]);
 
   const pfOptions = useMemo(() => pfList.map((pf) => ({
     value: pf.id,

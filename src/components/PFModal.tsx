@@ -1,6 +1,7 @@
-import React, { useEffect, useMemo } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Modal, Form, Input, Switch, Select } from 'antd';
 import type { PessoaFisica } from '../pages/PF';
+import { useTenant } from '../contexts/TenantContext';
 
 interface PFModalProps {
   open: boolean;
@@ -12,16 +13,8 @@ interface PFModalProps {
 
 const PFModal: React.FC<PFModalProps> = ({ open, mode = 'create', initialData, onCancel, onSave }) => {
   const [form] = Form.useForm();
-
-  const empresaOptions = useMemo(() => {
-    try {
-      const raw = localStorage.getItem('pj_list');
-      const list = raw ? JSON.parse(raw) : [];
-      return list.map((pj: any) => ({ label: pj.nomeFantasia || pj.razaoSocial, value: pj.id }));
-    } catch {
-      return [];
-    }
-  }, [open]);
+  const { currentTenant } = useTenant();
+  const [empresaOptions, setEmpresaOptions] = useState<Array<{ label: string; value: number }>>([]);
 
   useEffect(() => {
     if (open) {
@@ -30,16 +23,27 @@ const PFModal: React.FC<PFModalProps> = ({ open, mode = 'create', initialData, o
         cpf: initialData?.cpf ?? '',
         email: initialData?.email ?? '',
         telefone: initialData?.telefone ?? '',
-        empresaIds: (initialData as any)?.empresaIds ?? [],
+        empresaId: currentTenant?.id ?? (initialData as any)?.empresaId ?? undefined,
         ativo: initialData?.ativo ?? true,
       });
     }
-  }, [open, initialData, form]);
+  }, [open, initialData, form, currentTenant?.id]);
+
+  useEffect(() => {
+    if (!open) return;
+    if (!currentTenant) {
+      setEmpresaOptions([]);
+      return;
+    }
+    setEmpresaOptions([{ label: currentTenant.name, value: currentTenant.id }]);
+    form.setFieldsValue({ empresaId: currentTenant.id });
+  }, [open, currentTenant, form]);
 
   const handleOk = async () => {
     try {
       const values = await form.validateFields();
-      onSave(values);
+      const empresaId = currentTenant?.id ?? values.empresaId;
+      onSave({ ...values, empresaId });
     } catch (e) {}
   };
 
@@ -86,12 +90,11 @@ const PFModal: React.FC<PFModalProps> = ({ open, mode = 'create', initialData, o
           <Input placeholder="(11) 99999-0000" />
         </Form.Item>
 
-        <Form.Item name="empresaIds" label="Empresas que representa">
+        <Form.Item name="empresaId" label="Empresa">
           <Select
-            mode="multiple"
             options={empresaOptions}
-            placeholder="Selecione uma ou mais empresas"
-            allowClear
+            placeholder="Empresa selecionada no topo"
+            disabled
           />
         </Form.Item>
 

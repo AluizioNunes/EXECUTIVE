@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useMemo, useState, useEffect } from 'react';
 import { Layout, Menu, theme, Avatar, Dropdown, Typography, Badge, Tooltip, Select } from 'antd';
-import { HomeOutlined, CalendarOutlined, GlobalOutlined, FileTextOutlined, BlockOutlined, ProjectOutlined, TeamOutlined, RobotOutlined, DollarOutlined, UserOutlined, SettingOutlined, LogoutOutlined, BellOutlined, BarChartOutlined, AppstoreOutlined } from '@ant-design/icons';
+import { HomeOutlined, CalendarOutlined, GlobalOutlined, FileTextOutlined, ProjectOutlined, TeamOutlined, DollarOutlined, UserOutlined, SettingOutlined, LogoutOutlined, BellOutlined, BarChartOutlined, AppstoreOutlined } from '@ant-design/icons';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { format, differenceInMinutes } from 'date-fns';
@@ -8,9 +8,8 @@ import { ptBR } from 'date-fns/locale';
 import { userData } from './data/mockData';
 import { useTenant } from './contexts/TenantContext';
 
-const { Header, Content, Footer, Sider } = Layout;
+const { Header, Content, Footer } = Layout;
 const { Text } = Typography;
-const { Option } = Select;
 
 const menuItems = [
   { key: '/', icon: <HomeOutlined />, label: 'INICIO' },
@@ -22,18 +21,28 @@ const menuItems = [
       { key: '/cadastros/pf', label: 'PF - PESSOA FÍSICA' },
       { key: '/cadastros/pj', label: 'PJ - PESSOA JURÍDICA' },
       { key: '/cadastros/funcao', label: 'FUNÇÃO' },
+      { key: '/cadastros/executivos', label: 'EXECUTIVOS' },
+      { key: '/cadastros/ativos', label: 'ATIVOS' },
     ],
   },
   { key: '/agenda', icon: <CalendarOutlined />, label: 'AGENDA GLOBAL' },
   { key: '/travel', icon: <GlobalOutlined />, label: 'VIAGENS' },
   { key: '/documents', icon: <FileTextOutlined />, label: 'DOCUMENTOS' },
-  { key: '/governance', icon: <BlockOutlined />, label: 'GOVERNANÇA' },
   { key: '/tasks', icon: <ProjectOutlined />, label: 'TAREFAS' },
   { key: '/projects', icon: <ProjectOutlined />, label: 'PROJETOS' },
-  { key: '/financial', icon: <DollarOutlined />, label: 'FINANCEIRO' },
+  {
+    key: '/financial',
+    icon: <DollarOutlined />,
+    label: 'FINANCEIRO',
+    children: [
+      { key: '/financial/contas-a-pagar', label: 'CONTAS A PAGAR' },
+      { key: '/financial/contas-a-receber', label: 'CONTAS A RECEBER' },
+      { key: '/financial/contas', label: 'CONTAS' },
+      { key: '/financial/centro-de-custos', label: 'CENTRO DE CUSTOS' },
+    ],
+  },
   { key: '/stakeholders', icon: <TeamOutlined />, label: 'STAKEHOLDERS' },
   { key: '/analytics', icon: <BarChartOutlined />, label: 'ANALYTICS' },
-  { key: '/ai-assistant', icon: <RobotOutlined />, label: 'ASSISTENTE IA' },
   {
     key: '/sistema',
     icon: <SettingOutlined />,
@@ -42,6 +51,7 @@ const menuItems = [
       { key: '/sistema/usuario', label: 'USUARIO' },
       { key: '/sistema/perfil', label: 'PERFIL' },
       { key: '/sistema/permissoes', label: 'PERMISSÕES' },
+      { key: '/sistema/empresas', label: 'EMPRESAS' },
     ],
   },
 ];
@@ -50,13 +60,33 @@ const AppLayout: React.FC = () => {
   const { token: { colorBgContainer, borderRadiusLG } } = theme.useToken();
   const navigate = useNavigate();
   const location = useLocation();
-  const [collapsed, setCollapsed] = useState(false);
   const [sessionTime, setSessionTime] = useState(0);
   const { currentTenant, tenants, switchTenant } = useTenant();
+  const normalizedPathname = useMemo(() => {
+    const p = location.pathname || '/';
+    const match = p.match(/^\/(\d+)(\/.*)?$/);
+    if (!match) return p;
+    const rest = match[2] || '';
+    return rest === '' ? '/' : rest;
+  }, [location.pathname]);
 
-  const handleMenuClick = (e: { key: string }) => {
-    navigate(e.key);
-  };
+  const selectedMenuKeys = useMemo(() => [normalizedPathname], [normalizedPathname]);
+
+  const toTenantPath = useCallback(
+    (path: string) => {
+      if (!currentTenant) return path;
+      if (path === '/') return `/${currentTenant.id}`;
+      return `/${currentTenant.id}${path}`;
+    },
+    [currentTenant]
+  );
+
+  const handleMenuClick = useCallback(
+    (e: { key: string }) => {
+      navigate(toTenantPath(e.key));
+    },
+    [navigate, toTenantPath]
+  );
 
   // Atualizar tempo de sessão a cada minuto
   useEffect(() => {
@@ -80,29 +110,32 @@ const AppLayout: React.FC = () => {
     return `${hours}h ${mins}m`;
   };
 
-  const userMenuItems = [
-    {
-      key: 'profile',
-      icon: <UserOutlined />,
-      label: 'Perfil',
-    },
-    {
-      key: 'settings',
-      icon: <SettingOutlined />,
-      label: 'Configurações',
-    },
-    {
-      type: 'divider' as const,
-    },
-    {
-      key: 'logout',
-      icon: <LogoutOutlined />,
-      label: 'Sair',
-      danger: true,
-    },
-  ];
+  const userMenuItems = useMemo(
+    () => [
+      {
+        key: 'profile',
+        icon: <UserOutlined />,
+        label: 'Perfil',
+      },
+      {
+        key: 'settings',
+        icon: <SettingOutlined />,
+        label: 'Configurações',
+      },
+      {
+        type: 'divider' as const,
+      },
+      {
+        key: 'logout',
+        icon: <LogoutOutlined />,
+        label: 'Sair',
+        danger: true,
+      },
+    ],
+    []
+  );
 
-  const handleUserMenuClick = ({ key }: { key: string }) => {
+  const handleUserMenuClick = useCallback(({ key }: { key: string }) => {
     switch (key) {
       case 'profile':
         console.log('Abrir perfil');
@@ -114,63 +147,28 @@ const AppLayout: React.FC = () => {
         console.log('Fazer logout');
         break;
     }
-  };
+  }, []);
 
-  const handleTenantChange = (tenantId: number) => {
-    switchTenant(tenantId);
-  };
+  const dropdownMenu = useMemo(
+    () => ({ items: userMenuItems, onClick: handleUserMenuClick }),
+    [userMenuItems, handleUserMenuClick]
+  );
 
-  const siderWidth = collapsed ? 80 : 256;
+  const tenantOptions = useMemo(
+    () => tenants.map((tenant) => ({ value: tenant.id, label: tenant.name })),
+    [tenants]
+  );
+
+  const handleTenantChange = useCallback(
+    (tenantId: number) => {
+      switchTenant(tenantId);
+    },
+    [switchTenant]
+  );
 
   return (
     <Layout style={{ minHeight: '100vh', width: '100%' }}>
-      {/* Sidebar com altura máxima */}
-      <Sider 
-        collapsible 
-        collapsed={collapsed}
-        onCollapse={setCollapsed}
-        style={{ 
-          position: 'fixed', 
-          left: 0, 
-          top: 0,
-          height: '100vh',
-          zIndex: 1000,
-          overflow: 'auto'
-        }}
-        width={256}
-        collapsedWidth={80}
-      >
-        <div style={{ 
-          height: 64, 
-          display: 'flex', 
-          alignItems: 'center', 
-          justifyContent: 'center',
-          color: 'white',
-          fontSize: collapsed ? '16px' : '18px',
-          fontWeight: 'bold',
-          borderBottom: '1px solid rgba(255,255,255,0.1)'
-        }}>
-          {collapsed ? 'ES' : 'Executive Secretariat'}
-        </div>
-        <Menu 
-          theme="dark" 
-          selectedKeys={[location.pathname]} 
-          defaultOpenKeys={["/cadastros", "/sistema"]}
-          mode="inline" 
-          items={menuItems} 
-          onClick={handleMenuClick}
-          style={{ border: 'none' }}
-        />
-      </Sider>
-      
-      {/* Layout principal com navbar fixo */}
-      <Layout style={{ 
-        marginLeft: siderWidth, 
-        width: `calc(100% - ${siderWidth}px)`,
-        transition: 'all 0.2s',
-        minHeight: '100vh'
-      }}>
-        {/* Navbar fixo no topo */}
+      <Layout style={{ width: '100%', minHeight: '100vh' }}>
         <Header style={{ 
           padding: '0 24px', 
           background: colorBgContainer, 
@@ -181,10 +179,9 @@ const AppLayout: React.FC = () => {
           height: '64px',
           position: 'fixed',
           top: 0,
+          left: 0,
           right: 0,
-          zIndex: 999,
-          marginLeft: siderWidth,
-          width: `calc(100% - ${siderWidth}px)`
+          zIndex: 1000
         }}>
           <div>
             <Text strong style={{ fontSize: '16px' }}>
@@ -205,12 +202,8 @@ const AppLayout: React.FC = () => {
                 style={{ width: 200 }}
                 onChange={handleTenantChange}
                 size="middle"
+                options={tenantOptions}
               >
-                {tenants.map(tenant => (
-                  <Option key={tenant.id} value={tenant.id}>
-                    {tenant.name}
-                  </Option>
-                ))}
               </Select>
             )}
             
@@ -259,10 +252,7 @@ const AppLayout: React.FC = () => {
               </div>
               
               <Dropdown
-                menu={{ 
-                  items: userMenuItems, 
-                  onClick: handleUserMenuClick 
-                }}
+                menu={dropdownMenu}
                 placement="bottomRight"
                 arrow
               >
@@ -281,6 +271,28 @@ const AppLayout: React.FC = () => {
             </div>
           </div>
         </Header>
+
+        <div
+          style={{
+            position: 'fixed',
+            top: 64,
+            left: 0,
+            right: 0,
+            zIndex: 999,
+            background: colorBgContainer,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
+            borderBottom: '1px solid rgba(5, 5, 5, 0.06)',
+            overflow: 'hidden'
+          }}
+        >
+          <Menu
+            mode="horizontal"
+            selectedKeys={selectedMenuKeys}
+            items={menuItems}
+            onClick={handleMenuClick}
+            style={{ borderBottom: 'none' }}
+          />
+        </div>
         
         {/* Conteúdo principal com margem para o navbar fixo */}
         <Content style={{ 
@@ -288,7 +300,7 @@ const AppLayout: React.FC = () => {
           padding: '0',
           width: '100%',
           background: '#f0f2f5',
-          marginTop: '64px'
+          marginTop: '112px'
         }}>
           <motion.div
             key={location.pathname}
@@ -298,7 +310,7 @@ const AppLayout: React.FC = () => {
             transition={{ duration: 0.3 }}
             style={{ 
               padding: 24, 
-              minHeight: 'calc(100vh - 112px)', 
+              minHeight: 'calc(100vh - 160px)', 
               background: colorBgContainer, 
               borderRadius: borderRadiusLG, 
               margin: '24px',

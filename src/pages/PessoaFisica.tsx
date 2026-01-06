@@ -5,7 +5,7 @@ const { Title, Paragraph } = Typography;
 
 const PessoaFisicaPage: React.FC = () => {
   return (
-    <Card bordered={false}>
+    <Card variant="borderless">
       <Title level={3}>PF - Pessoa Física</Title>
       <Paragraph type="secondary">
         Cadastro de Pessoa Física (em desenvolvimento).

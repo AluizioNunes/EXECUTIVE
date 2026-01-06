@@ -1,44 +1,94 @@
-version: '3.8'
+name: itfact-executive
 
 services:
   postgres:
-    image: postgres:15
+    image: postgres:latest
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: executive_secretariat
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-executive}
     ports:
       - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data_executive_latest:/var/lib/postgresql
     networks:
       - app-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-executive}"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
 
-  backend:
+  mongodb:
+    image: mongo:latest
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - app-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "mongodb://localhost:27017/executive", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  api:
+    build:
+      context: ./Backend/FastAPI
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-executive}?options=-csearch_path%3D%22EXECUTIVE%22
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      NESTJS_BASE_URL: ${NESTJS_BASE_URL:-http://mongo-backend:3000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - app-network
+    restart: unless-stopped
+  
+  mongo-backend:
     build: 
       context: ./Backend/NestJS
     ports:
       - "3000:3000"
     environment:
-      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/executive_secretariat
-      - JWT_SECRET=your-jwt-secret-key-change-in-production
-      - ENCRYPTION_SECRET_KEY=your-encryption-secret-key-change-in-production
+      MONGODB_URI: ${MONGODB_URI:-mongodb://mongodb:27017/executive}
+      NODE_ENV: ${NODE_ENV:-development}
+      DB_HOST: ${DB_HOST:-postgres}
+      DB_PORT: ${DB_PORT:-5432}
+      DB_USER: ${POSTGRES_USER:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      DB_NAME: ${POSTGRES_DB:-executive}
+      DB_SCHEMA: ${DB_SCHEMA:-EXECUTIVE}
     depends_on:
-      - postgres
+      mongodb:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     networks:
       - app-network
+    restart: unless-stopped
 
   frontend:
     build: .
     ports:
       - "80:80"
+      - "443:443"
     depends_on:
-      - backend
+      - api
     networks:
       - app-network
+    restart: unless-stopped
 
 volumes:
-  postgres_data:
+  postgres_data_executive:
+  postgres_data_executive_latest:
+  mongodb_data:
 
 networks:
   app-network:

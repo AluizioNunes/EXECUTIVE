@@ -5,7 +5,7 @@ const { Title, Paragraph } = Typography;
 
 const PermissoesPage: React.FC = () => {
   return (
-    <Card bordered={false}>
+    <Card variant="borderless">
       <Title level={3}>PERMISSÕES</Title>
       <Paragraph type="secondary">
         Configuração de permissões (em desenvolvimento).

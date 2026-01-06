@@ -1,7 +1,8 @@
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Card, Table, Button, Space, Tag, Modal, message, Input } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import PFModal from '../components/PFModal';
+import { useTenant } from '../contexts/TenantContext';
 
 export type PessoaFisica = {
   id: number;
@@ -9,14 +10,14 @@ export type PessoaFisica = {
   cpf: string;
   email: string;
   telefone?: string;
-  empresaIds?: number[];
+  empresaId: number;
   ativo: boolean;
 };
 
 const initialPFs: PessoaFisica[] = [
-  { id: 1, nomeCompleto: 'João Pereira', cpf: '12345678901', email: 'joao.pereira@empresa.com', telefone: '(11) 99999-0001', empresaIds: [1], ativo: true },
-  { id: 2, nomeCompleto: 'Ana Costa', cpf: '98765432100', email: 'ana.costa@empresa.com', telefone: '(11) 99999-0002', empresaIds: [2], ativo: true },
-  { id: 3, nomeCompleto: 'Carlos Lima', cpf: '11122233344', email: 'carlos.lima@empresa.com', telefone: '(11) 99999-0003', empresaIds: [], ativo: false },
+  { id: 1, nomeCompleto: 'João Pereira', cpf: '12345678901', email: 'joao.pereira@empresa.com', telefone: '(11) 99999-0001', empresaId: 1, ativo: true },
+  { id: 2, nomeCompleto: 'Ana Costa', cpf: '98765432100', email: 'ana.costa@empresa.com', telefone: '(11) 99999-0002', empresaId: 1, ativo: true },
+  { id: 3, nomeCompleto: 'Carlos Lima', cpf: '11122233344', email: 'carlos.lima@empresa.com', telefone: '(11) 99999-0003', empresaId: 1, ativo: false },
 ];
 
 const onlyDigits = (s: string) => s.replace(/\D/g, '');
@@ -28,10 +29,52 @@ const formatCPF = (s: string) => {
   return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9, 11)}`;
 };
 
-const loadPF = (): PessoaFisica[] => {
+const tenantStorageKey = (tenantId: number | undefined, baseKey: string) =>
+  tenantId ? `${tenantId}_${baseKey}` : baseKey;
+
+const migrateToTenantKey = (tenantId: number | undefined, baseKey: string) => {
+  if (!tenantId) return;
   try {
-    const raw = localStorage.getItem('pf_list');
-    return raw ? JSON.parse(raw) : initialPFs;
+    const tenantKey = tenantStorageKey(tenantId, baseKey);
+    const tenantRaw = localStorage.getItem(tenantKey);
+    if (tenantRaw) return;
+    const legacyRaw = localStorage.getItem(baseKey);
+    if (!legacyRaw) return;
+    localStorage.setItem(tenantKey, legacyRaw);
+    localStorage.removeItem(baseKey);
+  } catch {}
+};
+
+const normalizePFList = (tenantId: number | undefined, list: any[]): PessoaFisica[] => {
+  const empresaFallback = Number.isFinite(Number(tenantId)) ? Number(tenantId) : 0;
+  return list
+    .filter((p) => p && Number.isFinite(Number(p.id)))
+    .map((p) => {
+      const empresaId =
+        Number.isFinite(Number(p.empresaId))
+          ? Number(p.empresaId)
+          : Array.isArray(p.empresaIds) && p.empresaIds.length > 0 && Number.isFinite(Number(p.empresaIds[0]))
+            ? Number(p.empresaIds[0])
+            : empresaFallback;
+      return {
+        id: Number(p.id),
+        nomeCompleto: String(p.nomeCompleto ?? ''),
+        cpf: String(p.cpf ?? ''),
+        email: String(p.email ?? ''),
+        telefone: p.telefone ? String(p.telefone) : undefined,
+        empresaId,
+        ativo: Boolean(p.ativo),
+      };
+    });
+};
+
+const loadPF = (tenantId: number | undefined): PessoaFisica[] => {
+  migrateToTenantKey(tenantId, 'pf_list');
+  try {
+    const raw = localStorage.getItem(tenantStorageKey(tenantId, 'pf_list'));
+    if (!raw) return initialPFs.map((p) => ({ ...p, empresaId: Number(tenantId ?? p.empresaId) }));
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? normalizePFList(tenantId, parsed) : [];
   } catch {
     return initialPFs;
   }
@@ -39,10 +82,12 @@ const loadPF = (): PessoaFisica[] => {
 
 const empresaLabelMap = (): Record<number, string> => {
   try {
-    const raw = localStorage.getItem('pj_list');
+    const raw = localStorage.getItem('empresas_list');
     const list = raw ? JSON.parse(raw) : [];
     const map: Record<number, string> = {};
-    list.forEach((pj: any) => { map[pj.id] = pj.nomeFantasia || pj.razaoSocial; });
+    list.forEach((empresa: any) => {
+      map[Number(empresa.IdEmpresas)] = empresa.NomeFantasia || empresa.RazaoSocial;
+    });
     return map;
   } catch {
     return {};
@@ -50,18 +95,31 @@ const empresaLabelMap = (): Record<number, string> => {
 };
 
 const PF: React.FC = () => {
-  const [data, setData] = useState<PessoaFisica[]>(loadPF());
+  const { currentTenant } = useTenant();
+  const tenantId = currentTenant?.id;
+
+  const [data, setData] = useState<PessoaFisica[]>(() => loadPF(tenantId));
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<PessoaFisica | null>(null);
   const [search, setSearch] = useState('');
 
-  const empresaMap = useMemo(() => empresaLabelMap(), [modalOpen]);
+  const [empresaMap, setEmpresaMap] = useState<Record<number, string>>(() => empresaLabelMap());
+
+  useEffect(() => {
+    setEmpresaMap(empresaLabelMap());
+  }, [modalOpen, tenantId]);
+
+  useEffect(() => {
+    setData(loadPF(tenantId));
+    setEditing(null);
+    setModalOpen(false);
+  }, [tenantId]);
 
   const filteredData = useMemo(() => {
     const s = search.toLowerCase();
     return data.filter(p => {
       const matchesText = p.nomeCompleto.toLowerCase().includes(s) || p.email.toLowerCase().includes(s) || onlyDigits(p.cpf).includes(onlyDigits(s));
-      const matchesEmpresa = (p.empresaIds ?? []).some(id => (empresaMap[id] ?? '').toLowerCase().includes(s));
+      const matchesEmpresa = (empresaMap[p.empresaId] ?? '').toLowerCase().includes(s);
       return matchesText || matchesEmpresa;
     });
   }, [data, search, empresaMap]);
@@ -72,17 +130,18 @@ const PF: React.FC = () => {
   };
 
   const handleSalvar = (values: Omit<PessoaFisica, 'id'> & Partial<Pick<PessoaFisica, 'id'>>) => {
+    const empresaId = Number(tenantId ?? values.empresaId);
     let newData: PessoaFisica[];
     if (editing) {
-      newData = data.map(p => p.id === editing.id ? { ...(editing as PessoaFisica), ...values, id: editing.id } : p);
+      newData = data.map(p => p.id === editing.id ? { ...(editing as PessoaFisica), ...values, empresaId, id: editing.id } : p);
       message.success('PF atualizada com sucesso');
     } else {
       const newId = Math.max(0, ...data.map(p => p.id)) + 1;
-      newData = [...data, { ...values, id: newId } as PessoaFisica];
+      newData = [...data, { ...values, empresaId, id: newId } as PessoaFisica];
       message.success('PF criada com sucesso');
     }
     setData(newData);
-    try { localStorage.setItem('pf_list', JSON.stringify(newData)); } catch {}
+    try { localStorage.setItem(tenantStorageKey(tenantId, 'pf_list'), JSON.stringify(newData)); } catch {}
     setModalOpen(false);
     setEditing(null);
   };
@@ -102,7 +161,7 @@ const PF: React.FC = () => {
       onOk: () => {
         const newData = data.filter(p => p.id !== record.id);
         setData(newData);
-        try { localStorage.setItem('pf_list', JSON.stringify(newData)); } catch {}
+        try { localStorage.setItem(tenantStorageKey(tenantId, 'pf_list'), JSON.stringify(newData)); } catch {}
         message.success('PF excluída');
       }
     });
@@ -124,7 +183,7 @@ const PF: React.FC = () => {
         </Space>
       </Space>
 
-      <Card bordered={false}>
+      <Card variant="borderless">
         <Table<PessoaFisica>
           rowKey="id"
           dataSource={filteredData}
@@ -136,10 +195,7 @@ const PF: React.FC = () => {
             { title: 'Telefone', dataIndex: 'telefone', key: 'telefone' },
             { title: 'Empresas', key: 'empresas', render: (_, r) => (
               <Space size={4} wrap>
-                {(r.empresaIds ?? []).length === 0 && <Tag>-</Tag>}
-                {(r.empresaIds ?? []).map((id) => (
-                  <Tag key={id}>{empresaMap[id] ?? id}</Tag>
-                ))}
+                <Tag>{empresaMap[r.empresaId] ?? r.empresaId}</Tag>
               </Space>
             ) },
             {

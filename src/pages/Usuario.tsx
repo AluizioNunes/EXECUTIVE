@@ -1,28 +1,64 @@
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Card, Table, Button, Space, Tag, Modal, message, Input } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import UsuarioModal from '../components/UsuarioModal';
+import { useTenant } from '../contexts/TenantContext';
 
 export type Usuario = {
   id: number;
   username: string;
   email: string;
   pfId?: number;
+  empresaId: number;
   ativo: boolean;
 };
 
 const initialUsuarios: Usuario[] = [];
 
-const loadUsuarios = (): Usuario[] => {
+const tenantStorageKey = (tenantId: number | undefined, baseKey: string) =>
+  tenantId ? `${tenantId}_${baseKey}` : baseKey;
+
+const migrateToTenantKey = (tenantId: number | undefined, baseKey: string) => {
+  if (!tenantId) return;
   try {
-    const raw = localStorage.getItem('usuario_list');
-    return raw ? JSON.parse(raw) : initialUsuarios;
+    const tenantKey = tenantStorageKey(tenantId, baseKey);
+    const tenantRaw = localStorage.getItem(tenantKey);
+    if (tenantRaw) return;
+    const legacyRaw = localStorage.getItem(baseKey);
+    if (!legacyRaw) return;
+    localStorage.setItem(tenantKey, legacyRaw);
+    localStorage.removeItem(baseKey);
+  } catch {}
+};
+
+const normalizeUsuarioList = (tenantId: number | undefined, list: any[]): Usuario[] => {
+  const empresaFallback = Number.isFinite(Number(tenantId)) ? Number(tenantId) : 0;
+  return list
+    .filter((u) => u && Number.isFinite(Number(u.id)))
+    .map((u) => ({
+      id: Number(u.id),
+      username: String(u.username ?? ''),
+      email: String(u.email ?? ''),
+      pfId: Number.isFinite(Number(u.pfId)) ? Number(u.pfId) : undefined,
+      empresaId: Number.isFinite(Number(u.empresaId)) ? Number(u.empresaId) : empresaFallback,
+      ativo: Boolean(u.ativo),
+    }));
+};
+
+const loadUsuarios = (tenantId: number | undefined): Usuario[] => {
+  migrateToTenantKey(tenantId, 'usuario_list');
+  try {
+    const raw = localStorage.getItem(tenantStorageKey(tenantId, 'usuario_list'));
+    if (!raw) return initialUsuarios;
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? normalizeUsuarioList(tenantId, parsed) : [];
   } catch { return initialUsuarios; }
 };
 
-const pfNameMap = (): Record<number, string> => {
+const pfNameMap = (tenantId: number | undefined): Record<number, string> => {
+  migrateToTenantKey(tenantId, 'pf_list');
   try {
-    const raw = localStorage.getItem('pf_list');
+    const raw = localStorage.getItem(tenantStorageKey(tenantId, 'pf_list'));
     const list = raw ? JSON.parse(raw) : [];
     const map: Record<number, string> = {};
     list.forEach((pf: any) => { map[pf.id] = pf.nomeCompleto; });
@@ -31,12 +67,25 @@ const pfNameMap = (): Record<number, string> => {
 };
 
 const UsuarioPage: React.FC = () => {
-  const [data, setData] = useState<Usuario[]>(loadUsuarios());
+  const { currentTenant } = useTenant();
+  const tenantId = currentTenant?.id;
+
+  const [data, setData] = useState<Usuario[]>(() => loadUsuarios(tenantId));
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Usuario | null>(null);
   const [search, setSearch] = useState('');
 
-  const pfMap = useMemo(() => pfNameMap(), [modalOpen]);
+  const [pfMap, setPfMap] = useState<Record<number, string>>(() => pfNameMap(tenantId));
+
+  useEffect(() => {
+    setPfMap(pfNameMap(tenantId));
+  }, [modalOpen, tenantId]);
+
+  useEffect(() => {
+    setData(loadUsuarios(tenantId));
+    setEditing(null);
+    setModalOpen(false);
+  }, [tenantId]);
 
   const filtered = useMemo(() => {
     const s = search.toLowerCase();
@@ -46,17 +95,18 @@ const UsuarioPage: React.FC = () => {
   const handleNova = () => { setEditing(null); setModalOpen(true); };
 
   const handleSalvar = (values: Omit<Usuario, 'id'> & Partial<Pick<Usuario, 'id'>>) => {
+    const empresaId = Number(tenantId ?? values.empresaId);
     let newData: Usuario[];
     if (editing) {
-      newData = data.map(u => u.id === editing.id ? { ...(editing as Usuario), ...values, id: editing.id } : u);
+      newData = data.map(u => u.id === editing.id ? { ...(editing as Usuario), ...values, empresaId, id: editing.id } : u);
       message.success('Usuário atualizado');
     } else {
       const newId = Math.max(0, ...data.map(u => u.id)) + 1;
-      newData = [...data, { ...values, id: newId } as Usuario];
+      newData = [...data, { ...values, empresaId, id: newId } as Usuario];
       message.success('Usuário criado');
     }
     setData(newData);
-    try { localStorage.setItem('usuario_list', JSON.stringify(newData)); } catch {}
+    try { localStorage.setItem(tenantStorageKey(tenantId, 'usuario_list'), JSON.stringify(newData)); } catch {}
     setModalOpen(false); setEditing(null);
   };
 
@@ -72,7 +122,7 @@ const UsuarioPage: React.FC = () => {
       onOk: () => {
         const newData = data.filter(u => u.id !== record.id);
         setData(newData);
-        try { localStorage.setItem('usuario_list', JSON.stringify(newData)); } catch {}
+        try { localStorage.setItem(tenantStorageKey(tenantId, 'usuario_list'), JSON.stringify(newData)); } catch {}
         message.success('Usuário excluído');
       }
     });
@@ -88,7 +138,7 @@ const UsuarioPage: React.FC = () => {
         </Space>
       </Space>
 
-      <Card bordered={false}>
+      <Card variant="borderless">
         <Table<Usuario>
           rowKey="id"
           dataSource={filtered}
