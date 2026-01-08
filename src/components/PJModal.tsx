@@ -46,7 +46,7 @@ const PJModal: React.FC<PJModalProps> = ({ open, mode = 'create', initialData, o
       cancelText="Cancelar"
       onCancel={onCancel}
       onOk={handleOk}
-      destroyOnClose
+      destroyOnHidden
     >
       <Form form={form} layout="vertical">
         <Form.Item

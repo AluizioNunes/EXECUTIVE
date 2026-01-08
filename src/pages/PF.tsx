@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Card, Table, Button, Space, Tag, Modal, message, Input } from 'antd';
+import { App as AntdApp, Card, Table, Button, Space, Tag, Input } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import PFModal from '../components/PFModal';
 import { useTenant } from '../contexts/TenantContext';
@@ -97,6 +97,7 @@ const empresaLabelMap = (): Record<number, string> => {
 const PF: React.FC = () => {
   const { currentTenant } = useTenant();
   const tenantId = currentTenant?.id;
+  const { message, modal } = AntdApp.useApp();
 
   const [data, setData] = useState<PessoaFisica[]>(() => loadPF(tenantId));
   const [modalOpen, setModalOpen] = useState(false);
@@ -152,7 +153,7 @@ const PF: React.FC = () => {
   };
 
   const handleExcluir = (record: PessoaFisica) => {
-    Modal.confirm({
+    modal.confirm({
       title: 'Excluir PF',
       content: `Deseja excluir a PF "${record.nomeCompleto}"?`,
       okText: 'Excluir',

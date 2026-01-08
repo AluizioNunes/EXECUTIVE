@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Card, Typography, Row, Col, Tag, List, Button, Space, Modal, message } from 'antd';
+import { App as AntdApp, Card, Typography, Row, Col, Tag, List, Button, Space } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import { userData } from '../data/mockData';
 import FuncaoModal from '../components/FuncaoModal';
@@ -57,6 +57,7 @@ const Perfil: React.FC = () => {
   const [funcoes, setFuncoes] = useState<Funcao[]>(() => loadFuncoes(tenantId));
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Funcao | null>(null);
+  const { message, modal } = AntdApp.useApp();
 
   useEffect(() => {
     setFuncoes(loadFuncoes(tenantId));
@@ -102,7 +103,7 @@ const Perfil: React.FC = () => {
   };
 
   const handleExcluir = (funcao: Funcao) => {
-    Modal.confirm({
+    modal.confirm({
       title: 'Excluir função',
       content: `Deseja realmente excluir a função "${funcao.nome}"?`,
       okText: 'Excluir',

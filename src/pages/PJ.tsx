@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Card, Table, Button, Space, Tag, Modal, message, Input } from 'antd';
+import { App as AntdApp, Card, Table, Button, Space, Tag, Input } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import PJModal from '../components/PJModal';
 import { useTenant } from '../contexts/TenantContext';
@@ -86,6 +86,7 @@ const loadPJ = (tenantId: number | undefined): PessoaJuridica[] => {
 };
 
 const PJ: React.FC = () => {
+  const { message, modal } = AntdApp.useApp();
   const { currentTenant } = useTenant();
   const tenantId = currentTenant?.id;
 
@@ -141,7 +142,7 @@ const PJ: React.FC = () => {
   };
 
   const handleExcluir = (record: PessoaJuridica) => {
-    Modal.confirm({
+    modal.confirm({
       title: 'Excluir PJ',
       content: `Deseja excluir a PJ "${record.razaoSocial}"?`,
       okText: 'Excluir',

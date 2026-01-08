@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Card, Descriptions, Modal, Table, Button, Space, Input, message, Tooltip } from 'antd';
+import { App as AntdApp, Card, Descriptions, Table, Button, Space, Input, Tooltip } from 'antd';
 import { DeleteOutlined, EditOutlined, EyeOutlined, PlusOutlined, PrinterOutlined } from '@ant-design/icons';
 import EmpresasModal from '../components/EmpresasModal';
 import { useTenant } from '../contexts/TenantContext';
@@ -46,6 +46,7 @@ const Empresas: React.FC = () => {
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Empresa | null>(null);
   const [search, setSearch] = useState('');
+  const { message, modal } = AntdApp.useApp();
 
   const filtered = useMemo(() => {
     const s = search.toLowerCase();
@@ -104,7 +105,7 @@ const Empresas: React.FC = () => {
   };
 
   const handleExcluir = (record: Empresa) => {
-    Modal.confirm({
+    modal.confirm({
       title: 'Excluir Empresa',
       content: `Deseja excluir a empresa "${record.RazaoSocial}"?`,
       okText: 'Excluir',
@@ -119,7 +120,7 @@ const Empresas: React.FC = () => {
   };
 
   const handleVisualizar = (record: Empresa) => {
-    Modal.info({
+    modal.info({
       title: 'Detalhes da Empresa',
       width: 720,
       content: (

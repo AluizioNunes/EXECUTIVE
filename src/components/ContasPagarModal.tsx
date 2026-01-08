@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { Button, DatePicker, Form, Input, InputNumber, Modal, Select, Space, Upload, message } from 'antd';
+import React, { useEffect, useMemo, useState } from 'react';
+import { App as AntdApp, Button, DatePicker, Form, Input, InputNumber, Modal, Select, Space, Upload } from 'antd';
 import dayjs from 'dayjs';
 import { useTenant } from '../contexts/TenantContext';
 import type { ContaPagar } from '../pages/ContasPagar';
@@ -14,7 +14,14 @@ interface ContasPagarModalProps {
 
 const apiBaseUrl = () => {
   const env = (import.meta as any).env || {};
-  return String(env.VITE_API_BASE_URL || 'http://localhost:8000');
+  return String(env.VITE_API_BASE_URL || 'http://127.0.0.1:8000');
+};
+
+const authHeaders = () => {
+  const token = localStorage.getItem('auth_token');
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return headers;
 };
 
 type ExecOption = { value: number; label: string };
@@ -28,17 +35,39 @@ const parseBrazilianMoney = (value: unknown) => {
 };
 
 const ContasPagarModal: React.FC<ContasPagarModalProps> = ({ open, mode = 'create', initialData, onCancel, onSave }) => {
+  const { message } = AntdApp.useApp();
   const [form] = Form.useForm();
-  const { currentTenant } = useTenant();
-  const empresaNome = currentTenant?.name || '';
+  const { currentTenant, tenants } = useTenant();
+  const isAll = currentTenant?.id === 0;
+  const empresaNome = currentTenant?.id === 0 ? '' : currentTenant?.name || '';
   const [executivos, setExecutivos] = useState<ExecOption[]>([]);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const handleBaixarDocumento = async (id: number) => {
+    try {
+      const url = `${apiBaseUrl()}/api/contas-pagar/${id}/documento`;
+      const authorization = authHeaders().Authorization;
+      const res = await fetch(url, { headers: authorization ? { Authorization: authorization } : undefined });
+      if (!res.ok) throw new Error(await res.text());
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      window.open(blobUrl, '_blank', 'noopener,noreferrer');
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+    } catch {
+      message.error('Falha ao baixar documento');
+    }
+  };
 
   const tipoPagamento = Form.useWatch('TipoPagamento', form);
   const valorOriginal = Form.useWatch('ValorOriginal', form);
   const parcelas = Form.useWatch('Parcelas', form);
   const desconto = Form.useWatch('Desconto', form);
   const acrescimo = Form.useWatch('Acrescimo', form);
+  const empresaFormValue = Form.useWatch('Empresa', form);
+
+  const empresaOptions = useMemo(
+    () => tenants.filter((t) => t.id !== 0).map((t) => ({ value: t.name, label: t.name })),
+    [tenants]
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -69,14 +98,15 @@ const ContasPagarModal: React.FC<ContasPagarModalProps> = ({ open, mode = 'creat
 
   useEffect(() => {
     if (!open) return;
-    if (!empresaNome) {
+    const empresa = String(empresaFormValue ?? '').trim();
+    if (!empresa) {
       setExecutivos([]);
       return;
     }
     (async () => {
       try {
-        const url = `${apiBaseUrl()}/api/executivos?empresa=${encodeURIComponent(empresaNome)}`;
-        const res = await fetch(url, { headers: { 'Content-Type': 'application/json' } });
+        const url = `${apiBaseUrl()}/api/executivos?empresa=${encodeURIComponent(empresa)}`;
+        const res = await fetch(url, { headers: authHeaders() });
         if (!res.ok) throw new Error(await res.text());
         const json = (await res.json()) as any[];
         const options = Array.isArray(json)
@@ -89,7 +119,7 @@ const ContasPagarModal: React.FC<ContasPagarModalProps> = ({ open, mode = 'creat
         setExecutivos([]);
       }
     })();
-  }, [open, empresaNome]);
+  }, [open, empresaFormValue]);
 
   useEffect(() => {
     if (!open) return;
@@ -157,12 +187,21 @@ const ContasPagarModal: React.FC<ContasPagarModalProps> = ({ open, mode = 'creat
         onCancel();
       }}
       onOk={handleOk}
-      destroyOnClose
+      destroyOnHidden
       width={780}
     >
       <Form form={form} layout="vertical">
         <Form.Item name="Empresa" label="Empresa" rules={[{ required: true, message: 'Informe a empresa' }]}>
-          <Input disabled />
+          {isAll ? (
+            <Select
+              showSearch
+              placeholder="Selecione a empresa"
+              options={empresaOptions}
+              filterOption={(input, option) => String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())}
+            />
+          ) : (
+            <Input disabled />
+          )}
         </Form.Item>
 
         <Form.Item name="Descricao" label="Descrição" rules={[{ required: true, message: 'Informe a descrição' }]}>
@@ -277,7 +316,7 @@ const ContasPagarModal: React.FC<ContasPagarModalProps> = ({ open, mode = 'creat
               {initialData?.IdContasPagar && initialData?.DocumentoPath ? (
                 <Space>
                   <Button
-                    onClick={() => window.open(`${apiBaseUrl()}/api/contas-pagar/${initialData.IdContasPagar}/documento`, '_blank')}
+                    onClick={() => handleBaixarDocumento(initialData.IdContasPagar!)}
                   >
                     Baixar documento atual
                   </Button>
@@ -289,7 +328,10 @@ const ContasPagarModal: React.FC<ContasPagarModalProps> = ({ open, mode = 'creat
                   onClick={async () => {
                     try {
                       const id = initialData.IdContasPagar!;
-                      const res = await fetch(`${apiBaseUrl()}/api/contas-pagar/${id}/documento/baixar-url`, { method: 'POST' });
+                      const res = await fetch(`${apiBaseUrl()}/api/contas-pagar/${id}/documento/baixar-url`, {
+                        method: 'POST',
+                        headers: authHeaders(),
+                      });
                       if (!res.ok) throw new Error(await res.text());
                       message.success('Documento baixado do URL Cobrança');
                     } catch {

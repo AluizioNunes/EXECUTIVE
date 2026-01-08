@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { 
+  App as AntdApp,
   Typography, 
   Row, 
   Col, 
@@ -16,8 +17,7 @@ import {
   Modal,
   Descriptions,
   Spin,
-  Alert,
-  message
+  Alert
 } from 'antd';
 import { 
   CalendarOutlined, 
@@ -40,6 +40,7 @@ const { Option } = Select;
 const { RangePicker } = DatePicker;
 
 const AgendaPage: React.FC = () => {
+  const { message } = AntdApp.useApp();
   const { currentTenant, isLoading } = useTenant();
   const { meetings, loading: dataLoading } = useTenantData();
   const { 

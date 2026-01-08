@@ -1,9 +1,8 @@
 import React from 'react';
-import { Typography, Row, Col, Card, Statistic, List, Tag, Alert, Button } from 'antd';
-import { ArrowUpOutlined, ArrowDownOutlined, ApartmentOutlined, CalendarOutlined, ProjectOutlined } from '@ant-design/icons';
+import { Typography, Row, Col, Card, Statistic, List, Tag, Button } from 'antd';
+import { ArrowUpOutlined, ArrowDownOutlined, CalendarOutlined, ProjectOutlined } from '@ant-design/icons';
 import EChartsReact from 'echarts-for-react';
 import { format } from 'date-fns';
-import { useTenant } from '../contexts/TenantContext';
 import { useTenantData } from '../hooks/useTenantData';
 import { useTenantNavigation } from '../hooks/useTenantNavigation';
 
@@ -11,7 +10,6 @@ const { Title, Paragraph } = Typography;
 
 const HomePage: React.FC = () => {
   const today = new Date();
-  const { currentTenant } = useTenant();
   const { executives, meetings, tasks, loading } = useTenantData();
   const { navigateTo } = useTenantNavigation();
 
@@ -103,21 +101,6 @@ const HomePage: React.FC = () => {
 
   return (
     <div>
-      {/* Tenant Context Banner */}
-      {currentTenant && (
-        <Alert
-          message={
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <ApartmentOutlined />
-              <span>Você está visualizando dados da empresa: <strong>{currentTenant.name}</strong></span>
-            </div>
-          }
-          type="info"
-          showIcon
-          style={{ marginBottom: 24 }}
-        />
-      )}
-      
       <Title level={2}>Dashboard Executivo</Title>
       <Paragraph>Visão geral das atividades de secretariado para {format(today, 'dd/MM/yyyy')}.</Paragraph>
 

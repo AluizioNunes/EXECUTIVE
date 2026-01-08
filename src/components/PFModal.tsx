@@ -55,7 +55,7 @@ const PFModal: React.FC<PFModalProps> = ({ open, mode = 'create', initialData, o
       cancelText="Cancelar"
       onCancel={onCancel}
       onOk={handleOk}
-      destroyOnClose
+      destroyOnHidden
     >
       <Form form={form} layout="vertical">
         <Form.Item name="nomeCompleto" label="Nome Completo" rules={[{ required: true, message: 'Informe o nome completo' }]}>

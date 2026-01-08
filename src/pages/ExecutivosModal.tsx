@@ -16,14 +16,14 @@ const ExecutivosModal: React.FC<ExecutivosModalProps> = ({ open, mode = 'create'
   const { currentTenant, tenants } = useTenant();
 
   const empresaOptions = useMemo(() => {
-    const base = tenants.map((t) => ({ value: t.name, label: t.name }));
-    const currentValue = currentTenant?.name ? String(currentTenant.name) : '';
+    const base = tenants.filter((t) => t.id !== 0).map((t) => ({ value: t.name, label: t.name }));
+    const currentValue = currentTenant?.id === 0 ? '' : currentTenant?.name ? String(currentTenant.name) : '';
     const selectedValue = String(initialData?.Empresa ?? '').trim() || (mode === 'create' ? currentValue : '');
     if (selectedValue && !base.some((o) => o.value === selectedValue)) {
       return [{ value: selectedValue, label: selectedValue }, ...base];
     }
     return base;
-  }, [tenants, currentTenant?.name, initialData?.Empresa, mode]);
+  }, [tenants, currentTenant?.id, currentTenant?.name, initialData?.Empresa, mode]);
 
   useEffect(() => {
     if (!open) return;
@@ -32,9 +32,9 @@ const ExecutivosModal: React.FC<ExecutivosModalProps> = ({ open, mode = 'create'
       Executivo: initialData?.Executivo ?? '',
       Funcao: initialData?.Funcao ?? '',
       Perfil: initialData?.Perfil ?? '',
-      Empresa: initialData?.Empresa ?? (mode === 'create' ? currentTenant?.name ?? '' : ''),
+      Empresa: initialData?.Empresa ?? (mode === 'create' ? (currentTenant?.id === 0 ? '' : currentTenant?.name ?? '') : ''),
     });
-  }, [open, initialData, form, currentTenant?.name, mode]);
+  }, [open, initialData, form, currentTenant?.id, currentTenant?.name, mode]);
 
   const handleOk = async () => {
     try {

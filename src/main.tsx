@@ -1,6 +1,6 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
-import { ConfigProvider, theme } from 'antd'
+import { App as AntdApp, ConfigProvider, theme } from 'antd'
 import AppRoutes from './routes.tsx'
 import { TenantProvider } from './contexts/TenantContext'
 import './index.css'
@@ -15,9 +15,11 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         },
       }}
     >
-      <TenantProvider>
-        <AppRoutes />
-      </TenantProvider>
+      <AntdApp>
+        <TenantProvider>
+          <AppRoutes />
+        </TenantProvider>
+      </AntdApp>
     </ConfigProvider>
   </React.StrictMode>,
 )

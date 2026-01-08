@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo } from 'react';
 import { Form, Input, Modal, Select, Space } from 'antd';
 import { useTenant } from '../contexts/TenantContext';
-import type { CentroCusto } from '../pages/CentroCustos';
+import type { CentroCusto } from '../pages/CentroCustos.tsx';
 
 interface CentroCustosModalProps {
   open: boolean;
@@ -16,20 +16,20 @@ const CentroCustosModal: React.FC<CentroCustosModalProps> = ({ open, mode = 'cre
   const { currentTenant, tenants } = useTenant();
 
   const empresaOptions = useMemo(() => {
-    const base = tenants.map((t) => ({ value: t.name, label: t.name }));
-    const currentValue = currentTenant?.name ? String(currentTenant.name) : '';
+    const base = tenants.filter((t) => t.id !== 0).map((t) => ({ value: t.name, label: t.name }));
+    const currentValue = currentTenant?.id === 0 ? '' : currentTenant?.name ? String(currentTenant.name) : '';
     const selectedValue = String(initialData?.Empresa ?? '').trim() || (mode === 'create' ? currentValue : '');
     if (selectedValue && !base.some((o) => o.value === selectedValue)) {
       return [{ value: selectedValue, label: selectedValue }, ...base];
     }
     return base;
-  }, [tenants, currentTenant?.name, initialData?.Empresa, mode]);
+  }, [tenants, currentTenant?.id, currentTenant?.name, initialData?.Empresa, mode]);
 
   useEffect(() => {
     if (!open) return;
     form.setFieldsValue({
       IdCustos: initialData?.IdCustos,
-      Empresa: initialData?.Empresa ?? (mode === 'create' ? currentTenant?.name ?? '' : ''),
+      Empresa: initialData?.Empresa ?? (mode === 'create' ? (currentTenant?.id === 0 ? '' : currentTenant?.name ?? '') : ''),
       Nome: initialData?.Nome ?? '',
       CodigoInterno: initialData?.CodigoInterno ?? undefined,
       Classe: initialData?.Classe ?? undefined,
@@ -38,7 +38,7 @@ const CentroCustosModal: React.FC<CentroCustosModalProps> = ({ open, mode = 'cre
       Departamento: initialData?.Departamento ?? undefined,
       Responsavel: initialData?.Responsavel ?? undefined,
     });
-  }, [open, initialData, form, currentTenant?.name, mode]);
+  }, [open, initialData, form, currentTenant?.id, currentTenant?.name, mode]);
 
   const handleOk = async () => {
     try {
@@ -71,7 +71,7 @@ const CentroCustosModal: React.FC<CentroCustosModalProps> = ({ open, mode = 'cre
       onOk={handleOk}
       afterClose={() => form.resetFields()}
       width={820}
-      destroyOnClose
+      destroyOnHidden
     >
       <Form form={form} layout="vertical">
         {mode === 'edit' ? (
@@ -123,4 +123,3 @@ const CentroCustosModal: React.FC<CentroCustosModalProps> = ({ open, mode = 'cre
 };
 
 export default CentroCustosModal;
-

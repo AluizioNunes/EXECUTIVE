@@ -17,6 +17,14 @@ type EmpresaFromStorage = {
   Logomarca?: string;
 };
 
+const EXECUTIVE_TENANT_ID = 0;
+const EXECUTIVE_TENANT: Tenant = {
+  id: EXECUTIVE_TENANT_ID,
+  name: 'EXECUTIVE',
+  subdomain: 'executive',
+  isActive: true,
+};
+
 // Define the context type
 interface TenantContextType {
   currentTenant: Tenant | null;
@@ -76,11 +84,16 @@ const empresasToTenants = (empresas: EmpresaFromStorage[]): Tenant[] => {
     });
 };
 
+const withExecutiveTenant = (tenants: Tenant[]): Tenant[] => {
+  const base = tenants.filter((t) => t.id !== EXECUTIVE_TENANT_ID);
+  return [EXECUTIVE_TENANT, ...base];
+};
+
 // Create the provider component
 export const TenantProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [tenants, setTenants] = useState<Tenant[]>(() => empresasToTenants(loadEmpresas()));
+  const [tenants, setTenants] = useState<Tenant[]>(() => withExecutiveTenant(empresasToTenants(loadEmpresas())));
   const [currentTenant, setCurrentTenant] = useState<Tenant | null>(() => {
-    const list = empresasToTenants(loadEmpresas());
+    const list = withExecutiveTenant(empresasToTenants(loadEmpresas()));
     return list[0] || null;
   });
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -126,6 +139,7 @@ export const TenantProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   const removeTenant = (tenantId: number) => {
+    if (tenantId === EXECUTIVE_TENANT_ID) return;
     setTenants(prev => {
       const next = prev.filter(t => t.id !== tenantId);
       if (currentTenant && currentTenant.id === tenantId) {
@@ -136,7 +150,7 @@ export const TenantProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   const refreshTenantData = () => {
-    const nextTenants = empresasToTenants(loadEmpresas());
+    const nextTenants = withExecutiveTenant(empresasToTenants(loadEmpresas()));
     setTenants(nextTenants);
     setCurrentTenant((prev) => {
       if (!prev) return nextTenants[0] ?? null;

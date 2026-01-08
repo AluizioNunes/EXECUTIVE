@@ -72,7 +72,7 @@ const EmpresasModal: React.FC<EmpresasModalProps> = ({ open, mode = 'create', in
         onCancel();
       }}
       onOk={handleOk}
-      destroyOnClose
+      destroyOnHidden
     >
       <Form form={form} layout="vertical">
         <Form.Item

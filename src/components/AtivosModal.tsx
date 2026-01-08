@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo } from 'react';
 import { Form, Input, Modal, Select, Space } from 'antd';
 import { useTenant } from '../contexts/TenantContext';
-import type { Ativo } from '../pages/Ativos';
+import type { Ativo } from '../pages/Ativos.tsx';
 
 interface AtivosModalProps {
   open: boolean;
@@ -16,20 +16,20 @@ const AtivosModal: React.FC<AtivosModalProps> = ({ open, mode = 'create', initia
   const { currentTenant, tenants } = useTenant();
 
   const empresaOptions = useMemo(() => {
-    const base = tenants.map((t) => ({ value: t.name, label: t.name }));
-    const currentValue = currentTenant?.name ? String(currentTenant.name) : '';
+    const base = tenants.filter((t) => t.id !== 0).map((t) => ({ value: t.name, label: t.name }));
+    const currentValue = currentTenant?.id === 0 ? '' : currentTenant?.name ? String(currentTenant.name) : '';
     const selectedValue = String(initialData?.Empresa ?? '').trim() || (mode === 'create' ? currentValue : '');
     if (selectedValue && !base.some((o) => o.value === selectedValue)) {
       return [{ value: selectedValue, label: selectedValue }, ...base];
     }
     return base;
-  }, [tenants, currentTenant?.name, initialData?.Empresa, mode]);
+  }, [tenants, currentTenant?.id, currentTenant?.name, initialData?.Empresa, mode]);
 
   useEffect(() => {
     if (!open) return;
     form.setFieldsValue({
       IdAtivo: initialData?.IdAtivo,
-      Empresa: initialData?.Empresa ?? (mode === 'create' ? currentTenant?.name ?? '' : ''),
+      Empresa: initialData?.Empresa ?? (mode === 'create' ? (currentTenant?.id === 0 ? '' : currentTenant?.name ?? '') : ''),
       Ativo: initialData?.Ativo ?? '',
       CodigoInternoAtivo: initialData?.CodigoInternoAtivo ?? undefined,
       Placa: initialData?.Placa ?? undefined,
@@ -40,7 +40,7 @@ const AtivosModal: React.FC<AtivosModalProps> = ({ open, mode = 'create', initia
       Responsavel: initialData?.Responsavel ?? undefined,
       Atribuido: initialData?.Atribuido ?? undefined,
     });
-  }, [open, initialData, form, currentTenant?.name, mode]);
+  }, [open, initialData, form, currentTenant?.id, currentTenant?.name, mode]);
 
   const handleOk = async () => {
     try {
@@ -75,7 +75,7 @@ const AtivosModal: React.FC<AtivosModalProps> = ({ open, mode = 'create', initia
       onOk={handleOk}
       afterClose={() => form.resetFields()}
       width={820}
-      destroyOnClose
+      destroyOnHidden
     >
       <Form form={form} layout="vertical">
         {mode === 'edit' ? (
@@ -135,4 +135,3 @@ const AtivosModal: React.FC<AtivosModalProps> = ({ open, mode = 'create', initia
 };
 
 export default AtivosModal;
-

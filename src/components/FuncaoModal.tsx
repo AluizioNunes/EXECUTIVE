@@ -52,7 +52,7 @@ const FuncaoModal: React.FC<FuncaoModalProps> = ({
       cancelText="Cancelar"
       onCancel={onCancel}
       onOk={handleOk}
-      destroyOnClose
+      destroyOnHidden
     >
       <Form form={form} layout="vertical">
         <Form.Item name="nome" label="Nome da Função" rules={[{ required: true, message: 'Informe o nome da função' }]}>

@@ -1,6 +1,10 @@
 import os
 import re
 import json
+import time
+import hmac
+import base64
+import hashlib
 import urllib.parse
 import urllib.error
 import urllib.request
@@ -9,29 +13,46 @@ from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status
+from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import Column, Date, Integer, Numeric, String, create_engine, select, text
+from sqlalchemy import Column, Date, Integer, MetaData, Numeric, String, create_engine, select, text
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+from sqlalchemy.schema import ForeignKeyConstraint
+from sqlalchemy.sql import quoted_name
 
 
 def _database_url() -> str:
-    return os.getenv("DATABASE_URL") or "sqlite:///./executive.db"
-
-
-def _is_sqlite(url: str) -> bool:
-    return url.startswith("sqlite:")
+    raw = os.getenv("DATABASE_URL")
+    if not raw or not str(raw).strip():
+        user = str(os.getenv("POSTGRES_USER") or "postgres").strip() or "postgres"
+        password = str(os.getenv("POSTGRES_PASSWORD") or "postgres")
+        db = str(os.getenv("POSTGRES_DB") or "executive").strip() or "executive"
+        host = str(os.getenv("POSTGRES_HOST") or os.getenv("DB_HOST") or "127.0.0.1").strip() or "127.0.0.1"
+        port = str(os.getenv("POSTGRES_PORT") or os.getenv("DB_PORT") or "5432").strip() or "5432"
+        password_enc = urllib.parse.quote_plus(password)
+        return f"postgresql+psycopg://{user}:{password_enc}@{host}:{port}/{db}"
+    raw = str(raw).strip()
+    if raw.startswith("sqlite:"):
+        raise RuntimeError("SQLite não é suportado (PostgreSQL obrigatório)")
+    if not raw.startswith("postgresql"):
+        raise RuntimeError("Somente PostgreSQL é suportado")
+    return raw
 
 def _connect_args(url: str) -> dict[str, Any]:
-    if _is_sqlite(url):
-        return {"check_same_thread": False}
-    if url.startswith("postgresql"):
-        schema = os.getenv("DB_SCHEMA") or "EXECUTIVE"
-        return {"options": f'-csearch_path="{schema}"'}
-    return {}
+    if not url.startswith("postgresql"):
+        raise RuntimeError("Somente PostgreSQL é suportado")
+    try:
+        parsed = make_url(url)
+        if str(parsed.query.get("options") or "").strip():
+            return {}
+    except Exception:
+        pass
+    schema = os.getenv("DB_SCHEMA") or "EXECUTIVE"
+    return {"options": f'-csearch_path="{schema}"'}
 
 
 DATABASE_URL = _database_url()
@@ -42,7 +63,8 @@ engine = create_engine(
 )
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 SCHEMA_NAME = os.getenv("DB_SCHEMA") or "EXECUTIVE"
-SCHEMA_TABLE_ARGS = {} if _is_sqlite(DATABASE_URL) else {"schema": SCHEMA_NAME}
+SCHEMA_TABLE_ARGS = {"schema": SCHEMA_NAME}
+TENANTS_TABLE_NAME = quoted_name("Tenants", True)
 
 
 class Base(DeclarativeBase):
@@ -122,19 +144,202 @@ class CentroCustosModel(Base):
     Responsavel = Column("Responsavel", String(255), nullable=True)
 
 
+class TenantsModel(Base):
+    __tablename__ = TENANTS_TABLE_NAME
+    __table_args__ = SCHEMA_TABLE_ARGS
+
+    IdTenant = Column("IdTenant", Integer, primary_key=True, autoincrement=True, index=True)
+    Tenant = Column("Tenant", String(255), nullable=False)
+    Slug = Column("Slug", String(255), nullable=False, unique=True, index=True)
+    DataCriacao = Column("DataCriacao", Date, nullable=False, default=date.today)
+    DataUpdate = Column("DataUpdate", Date, nullable=False, default=date.today)
+    Cadastrante = Column("Cadastrante", String(255), nullable=True)
+
+
+class UsuariosModel(Base):
+    __tablename__ = "Usuarios"
+    __table_args__ = SCHEMA_TABLE_ARGS
+
+    IdUsuario = Column("IdUsuarios", Integer, primary_key=True, autoincrement=True, index=True)
+    Usuario = Column("Usuario", String(255), nullable=False, unique=True, index=True)
+    TenantId = Column("TenantId", Integer, nullable=False, index=True)
+    Role = Column("Role", String(50), nullable=False)
+    Nome = Column("Nome", String(255), nullable=True)
+    Funcao = Column("Funcao", String(255), nullable=True)
+    Perfil = Column("Perfil", String(255), nullable=True)
+    Permissao = Column("Permissao", String(255), nullable=True)
+    Celular = Column("Celular", String(30), nullable=True)
+    Email = Column("Email", String(255), nullable=True)
+    SenhaSalt = Column("SenhaSalt", String(64), nullable=False)
+    SenhaHash = Column("SenhaHash", String(128), nullable=False)
+    Ativo = Column("Ativo", Integer, nullable=False, default=1)
+
+
+def _drop_legacy_tenant_table() -> None:
+    try:
+        with engine.connect() as conn:
+            for schema in (SCHEMA_NAME, "public"):
+                conn.exec_driver_sql(f'DROP TABLE IF EXISTS "{schema}"."tenant" CASCADE')
+            conn.commit()
+    except Exception:
+        return
+
+
+_drop_legacy_tenant_table()
+
+def _ensure_postgres_tenants_table_name() -> None:
+    if not DATABASE_URL.startswith("postgresql"):
+        return
+    try:
+        with engine.connect() as conn:
+            names = conn.execute(
+                text("select table_name from information_schema.tables where table_schema=:s"),
+                {"s": SCHEMA_NAME},
+            ).fetchall()
+            existing = {str(r[0]) for r in names}
+
+            if "tenant" in existing:
+                conn.exec_driver_sql(f'DROP TABLE IF EXISTS "{SCHEMA_NAME}"."tenant" CASCADE')
+
+            if "tenants" in existing and "Tenants" not in existing:
+                conn.exec_driver_sql(f'ALTER TABLE "{SCHEMA_NAME}".tenants RENAME TO "Tenants"')
+
+            conn.commit()
+    except Exception:
+        return
+
+
+_ensure_postgres_tenants_table_name()
+
 Base.metadata.create_all(bind=engine)
+
+def _seed_reset_postgres_sequence(*, table: str, column: str) -> None:
+    if not DATABASE_URL.startswith("postgresql"):
+        return
+    try:
+        with engine.connect() as conn:
+            conn.execute(
+                text(
+                    f"""
+                    select setval(
+                        pg_get_serial_sequence('"{SCHEMA_NAME}"."{table}"', '{column}'),
+                        (select coalesce(max("{column}"), 1) from "{SCHEMA_NAME}"."{table}"),
+                        true
+                    )
+                    """
+                )
+            )
+            conn.commit()
+    except Exception:
+        return
+
+
+def _ensure_default_tenant_executive() -> None:
+    try:
+        with SessionLocal() as db:
+            today = date.today()
+            existing_slug = db.execute(select(TenantsModel).where(TenantsModel.Slug == "executive")).scalar_one_or_none()
+            existing_id1 = db.get(TenantsModel, 1)
+
+            if existing_id1 and existing_id1.Slug != "executive":
+                if existing_slug and existing_slug.IdTenant != 1:
+                    db.delete(existing_slug)
+                    db.commit()
+                existing_id1.Tenant = "EXECUTIVE"
+                existing_id1.Slug = "executive"
+                existing_id1.DataCriacao = existing_id1.DataCriacao or today
+                existing_id1.DataUpdate = today
+                if not existing_id1.Cadastrante:
+                    existing_id1.Cadastrante = "SYSTEM"
+                db.commit()
+                db.refresh(existing_id1)
+                _seed_reset_postgres_sequence(table="Tenants", column="IdTenant")
+                return
+
+            if existing_id1 and existing_id1.Slug == "executive":
+                existing_id1.Tenant = "EXECUTIVE"
+                existing_id1.DataCriacao = existing_id1.DataCriacao or today
+                existing_id1.DataUpdate = today
+                if not existing_id1.Cadastrante:
+                    existing_id1.Cadastrante = "SYSTEM"
+                db.commit()
+                _seed_reset_postgres_sequence(table="Tenants", column="IdTenant")
+                return
+
+            if existing_slug and existing_slug.IdTenant != 1:
+                existing_slug.Tenant = "EXECUTIVE"
+                existing_slug.DataCriacao = existing_slug.DataCriacao or today
+                existing_slug.DataUpdate = today
+                if not existing_slug.Cadastrante:
+                    existing_slug.Cadastrante = "SYSTEM"
+                db.commit()
+                _seed_reset_postgres_sequence(table="Tenants", column="IdTenant")
+                return
+
+            row = TenantsModel(
+                IdTenant=1,
+                Tenant="EXECUTIVE",
+                Slug="executive",
+                DataCriacao=today,
+                DataUpdate=today,
+                Cadastrante="SYSTEM",
+            )
+            db.add(row)
+            db.commit()
+            _seed_reset_postgres_sequence(table="Tenants", column="IdTenant")
+    except Exception:
+        return
+
+
+def _pbkdf2_hash_password(password: str, salt_hex: str) -> str:
+    salt = bytes.fromhex(salt_hex)
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 120_000)
+    return dk.hex()
+
+
+def _ensure_default_admin_user() -> None:
+    try:
+        with SessionLocal() as db:
+            tenant = db.execute(select(TenantsModel).where(TenantsModel.Slug == "executive")).scalar_one_or_none()
+            tenant_id = int(tenant.IdTenant) if tenant else 1
+            existing_en = db.execute(select(UsuariosModel).where(UsuariosModel.Usuario == "ADMINISTRATOR")).scalar_one_or_none()
+            if existing_en:
+                db.delete(existing_en)
+                db.commit()
+
+            existing = db.execute(select(UsuariosModel).where(UsuariosModel.Usuario == "ADMINISTRADOR")).scalar_one_or_none()
+            salt_hex = os.urandom(16).hex()
+            senha_hash = _pbkdf2_hash_password("admin", salt_hex)
+            if existing:
+                existing.TenantId = tenant_id
+                existing.Role = "SUPERADMIN"
+                existing.Nome = existing.Nome or "ADMINISTRADOR"
+                existing.SenhaSalt = salt_hex
+                existing.SenhaHash = senha_hash
+                existing.Ativo = 1
+                db.commit()
+                _seed_reset_postgres_sequence(table="Usuarios", column="IdUsuario")
+                return
+
+            row = UsuariosModel(
+                Usuario="ADMINISTRADOR",
+                TenantId=tenant_id,
+                Role="SUPERADMIN",
+                Nome="ADMINISTRADOR",
+                SenhaSalt=salt_hex,
+                SenhaHash=senha_hash,
+                Ativo=1,
+            )
+            db.add(row)
+            db.commit()
+            _seed_reset_postgres_sequence(table="Usuarios", column="IdUsuario")
+    except Exception:
+        return
+
 
 def _ensure_ativos_empresa_column() -> None:
     try:
         with engine.connect() as conn:
-            if _is_sqlite(DATABASE_URL):
-                rows = conn.exec_driver_sql("PRAGMA table_info('Ativos')").fetchall()
-                cols = {str(r[1]) for r in rows}
-                if "Empresa" not in cols:
-                    conn.exec_driver_sql('ALTER TABLE "Ativos" ADD COLUMN "Empresa" VARCHAR(255)')
-                conn.commit()
-                return
-
             exists = conn.execute(
                 text(
                     "select 1 from information_schema.columns where table_schema=:s and table_name=:t and column_name=:c"
@@ -148,7 +353,116 @@ def _ensure_ativos_empresa_column() -> None:
         return
 
 
+def _ensure_usuarios_columns() -> None:
+    if not DATABASE_URL.startswith("postgresql"):
+        return
+    try:
+        with engine.connect() as conn:
+            existing_rows = conn.execute(
+                text("select column_name from information_schema.columns where table_schema=:s and table_name=:t"),
+                {"s": SCHEMA_NAME, "t": "Usuarios"},
+            ).fetchall()
+            existing = {str(r[0]) for r in existing_rows}
+
+            statements: list[str] = []
+            if "Usuario" not in existing:
+                statements.append(f'ALTER TABLE "{SCHEMA_NAME}"."Usuarios" ADD COLUMN "Usuario" VARCHAR(255)')
+            if "TenantId" not in existing:
+                statements.append(f'ALTER TABLE "{SCHEMA_NAME}"."Usuarios" ADD COLUMN "TenantId" INTEGER')
+            if "Role" not in existing:
+                statements.append(f'ALTER TABLE "{SCHEMA_NAME}"."Usuarios" ADD COLUMN "Role" VARCHAR(50)')
+            if "Nome" not in existing:
+                statements.append(f'ALTER TABLE "{SCHEMA_NAME}"."Usuarios" ADD COLUMN "Nome" VARCHAR(255)')
+            if "Funcao" not in existing:
+                statements.append(f'ALTER TABLE "{SCHEMA_NAME}"."Usuarios" ADD COLUMN "Funcao" VARCHAR(255)')
+            if "Perfil" not in existing:
+                statements.append(f'ALTER TABLE "{SCHEMA_NAME}"."Usuarios" ADD COLUMN "Perfil" VARCHAR(255)')
+            if "Permissao" not in existing:
+                statements.append(f'ALTER TABLE "{SCHEMA_NAME}"."Usuarios" ADD COLUMN "Permissao" VARCHAR(255)')
+            if "Celular" not in existing:
+                statements.append(f'ALTER TABLE "{SCHEMA_NAME}"."Usuarios" ADD COLUMN "Celular" VARCHAR(30)')
+            if "Email" not in existing:
+                statements.append(f'ALTER TABLE "{SCHEMA_NAME}"."Usuarios" ADD COLUMN "Email" VARCHAR(255)')
+            if "SenhaSalt" not in existing:
+                statements.append(f'ALTER TABLE "{SCHEMA_NAME}"."Usuarios" ADD COLUMN "SenhaSalt" VARCHAR(64)')
+            if "SenhaHash" not in existing:
+                statements.append(f'ALTER TABLE "{SCHEMA_NAME}"."Usuarios" ADD COLUMN "SenhaHash" VARCHAR(128)')
+            if "Ativo" not in existing:
+                statements.append(f'ALTER TABLE "{SCHEMA_NAME}"."Usuarios" ADD COLUMN "Ativo" INTEGER NOT NULL DEFAULT 1')
+
+            for stmt in statements:
+                conn.exec_driver_sql(stmt)
+            if statements:
+                conn.commit()
+    except Exception:
+        return
+
+
+def _ensure_usuarios_nome_column_position() -> None:
+    if not DATABASE_URL.startswith("postgresql"):
+        return
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    """
+                    select column_name, ordinal_position
+                    from information_schema.columns
+                    where table_schema=:s and table_name=:t
+                    order by ordinal_position asc
+                    """
+                ),
+                {"s": SCHEMA_NAME, "t": "Usuarios"},
+            ).fetchall()
+            positions = {str(r[0]): int(r[1]) for r in rows if r and r[0]}
+
+            if "IdUsuarios" not in positions or "Nome" not in positions:
+                return
+            if int(positions["Nome"]) == 2:
+                return
+
+            conn.exec_driver_sql(f'ALTER TABLE "{SCHEMA_NAME}"."Usuarios" RENAME TO "Usuarios__old_nome_order"')
+            conn.exec_driver_sql(
+                f"""
+                CREATE TABLE "{SCHEMA_NAME}"."Usuarios" (
+                    "IdUsuarios" INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                    "Nome" VARCHAR(255) NULL,
+                    "Usuario" VARCHAR(255) NOT NULL,
+                    "TenantId" INTEGER NOT NULL,
+                    "Role" VARCHAR(50) NOT NULL,
+                    "Funcao" VARCHAR(255) NULL,
+                    "Perfil" VARCHAR(255) NULL,
+                    "Permissao" VARCHAR(255) NULL,
+                    "Celular" VARCHAR(30) NULL,
+                    "Email" VARCHAR(255) NULL,
+                    "SenhaSalt" VARCHAR(64) NOT NULL,
+                    "SenhaHash" VARCHAR(128) NOT NULL,
+                    "Ativo" INTEGER NOT NULL DEFAULT 1,
+                    CONSTRAINT "uq_Usuarios_Usuario" UNIQUE ("Usuario")
+                )
+                """
+            )
+            conn.exec_driver_sql(
+                f"""
+                INSERT INTO "{SCHEMA_NAME}"."Usuarios"
+                    ("IdUsuarios","Nome","Usuario","TenantId","Role","Funcao","Perfil","Permissao","Celular","Email","SenhaSalt","SenhaHash","Ativo")
+                SELECT
+                    "IdUsuarios","Nome","Usuario","TenantId","Role","Funcao","Perfil","Permissao","Celular","Email","SenhaSalt","SenhaHash","Ativo"
+                FROM "{SCHEMA_NAME}"."Usuarios__old_nome_order"
+                """
+            )
+            conn.exec_driver_sql(f'CREATE INDEX IF NOT EXISTS "ix_Usuarios_TenantId" ON "{SCHEMA_NAME}"."Usuarios" ("TenantId")')
+            conn.exec_driver_sql(f'DROP TABLE "{SCHEMA_NAME}"."Usuarios__old_nome_order"')
+            conn.commit()
+    except Exception:
+        return
+
+
 _ensure_ativos_empresa_column()
+_ensure_usuarios_columns()
+_ensure_usuarios_nome_column_position()
+_ensure_default_tenant_executive()
+_ensure_default_admin_user()
 
 
 def get_db() -> Session:
@@ -331,14 +645,196 @@ class CentroCustosOut(BaseModel):
     Responsavel: Optional[str] = None
 
 
+class TenantCreate(BaseModel):
+    Tenant: str = Field(min_length=1, max_length=255)
+    Slug: str = Field(min_length=1, max_length=255)
+    Cadastrante: Optional[str] = Field(default=None, max_length=255)
+
+
+class TenantUpdate(BaseModel):
+    Tenant: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    Slug: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    Cadastrante: Optional[str] = Field(default=None, max_length=255)
+
+
+class TenantOut(BaseModel):
+    IdTenant: int
+    Tenant: str
+    Slug: str
+    DataCriacao: date
+    DataUpdate: date
+    Cadastrante: Optional[str] = None
+
+
+class UsuarioCreate(BaseModel):
+    Usuario: str = Field(min_length=1, max_length=255)
+    Senha: str = Field(min_length=1, max_length=255)
+    TenantId: Optional[int] = None
+    Role: Optional[str] = Field(default=None, max_length=50)
+    Nome: str = Field(min_length=1, max_length=255)
+    Funcao: Optional[str] = Field(default=None, max_length=255)
+    Perfil: Optional[str] = Field(default=None, max_length=255)
+    Permissao: Optional[str] = Field(default=None, max_length=255)
+    Celular: Optional[str] = Field(default=None, max_length=30)
+    Email: Optional[str] = Field(default=None, max_length=255)
+    Ativo: Optional[int] = Field(default=1, ge=0, le=1)
+
+
+class UsuarioUpdate(BaseModel):
+    Usuario: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    Senha: Optional[str] = Field(default=None, max_length=255)
+    TenantId: Optional[int] = None
+    Role: Optional[str] = Field(default=None, max_length=50)
+    Nome: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    Funcao: Optional[str] = Field(default=None, max_length=255)
+    Perfil: Optional[str] = Field(default=None, max_length=255)
+    Permissao: Optional[str] = Field(default=None, max_length=255)
+    Celular: Optional[str] = Field(default=None, max_length=30)
+    Email: Optional[str] = Field(default=None, max_length=255)
+    Ativo: Optional[int] = Field(default=None, ge=0, le=1)
+
+
+class UsuarioOut(BaseModel):
+    IdUsuarios: int
+    Usuario: str
+    TenantId: int
+    Role: str
+    Nome: Optional[str] = None
+    Funcao: Optional[str] = None
+    Perfil: Optional[str] = None
+    Permissao: Optional[str] = None
+    Celular: Optional[str] = None
+    Email: Optional[str] = None
+    Ativo: int
+
+
+class LoginIn(BaseModel):
+    Usuario: str = Field(min_length=1, max_length=255)
+    Senha: str = Field(min_length=1, max_length=255)
+    TenantSlug: Optional[str] = Field(default=None, max_length=255)
+
+
+class LoginOut(BaseModel):
+    token: str
+    usuario: str
+    role: str
+    nome: Optional[str] = None
+    perfil: Optional[str] = None
+    tenant: TenantOut
+    superadmin: bool
+
+
+def _auth_secret() -> bytes:
+    return str(os.getenv("AUTH_SECRET") or "dev-secret-change-me").encode("utf-8")
+
+
+def _b64url_encode(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode("utf-8").rstrip("=")
+
+
+def _b64url_decode(data: str) -> bytes:
+    pad = "=" * (-len(data) % 4)
+    return base64.urlsafe_b64decode((data + pad).encode("utf-8"))
+
+
+def _sign_token(payload: dict[str, Any]) -> str:
+    raw = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    body = _b64url_encode(raw)
+    sig = hmac.new(_auth_secret(), body.encode("utf-8"), hashlib.sha256).digest()
+    return f"{body}.{_b64url_encode(sig)}"
+
+
+def _verify_token(token: str) -> Optional[dict[str, Any]]:
+    try:
+        body, sig = token.split(".", 1)
+    except ValueError:
+        return None
+    expected = hmac.new(_auth_secret(), body.encode("utf-8"), hashlib.sha256).digest()
+    try:
+        provided = _b64url_decode(sig)
+    except Exception:
+        return None
+    if not hmac.compare_digest(expected, provided):
+        return None
+    try:
+        payload = json.loads(_b64url_decode(body).decode("utf-8"))
+    except Exception:
+        return None
+    exp = payload.get("exp")
+    if isinstance(exp, (int, float)) and time.time() > float(exp):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _get_auth(authorization: Optional[str] = Header(default=None)) -> Optional[dict[str, Any]]:
+    v = str(authorization or "").strip()
+    if not v:
+        return None
+    if v.lower().startswith("bearer "):
+        v = v.split(" ", 1)[1].strip()
+    if not v:
+        return None
+    return _verify_token(v)
+
+
+def _is_superadmin(auth: Optional[dict[str, Any]]) -> bool:
+    if not auth:
+        return False
+    return str(auth.get("role") or "").upper() == "SUPERADMIN" and str(auth.get("tenant_slug") or "") == "executive"
+
+
+def _is_executive_tenant(auth: Optional[dict[str, Any]]) -> bool:
+    if not auth:
+        return False
+    return str(auth.get("tenant_slug") or "") == "executive"
+
+
+def _is_admin(auth: Optional[dict[str, Any]]) -> bool:
+    if not auth:
+        return False
+    return str(auth.get("role") or "").upper() in {"ADMIN", "SUPERADMIN"}
+
+
+def _require_auth(auth: Optional[dict[str, Any]] = Depends(_get_auth)) -> dict[str, Any]:
+    if not auth:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Não autorizado")
+    return auth
+
+
+def _require_admin(auth: dict[str, Any] = Depends(_require_auth)) -> dict[str, Any]:
+    if not _is_admin(auth):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Não autorizado")
+    return auth
+
+
+def _require_superadmin(auth: Optional[dict[str, Any]] = Depends(_get_auth)) -> dict[str, Any]:
+    if not _is_superadmin(auth):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Não autorizado")
+    return auth or {}
+
+
 app = FastAPI(title="Executive API", version="0.1.0")
+
+def _cors_origins() -> list[str]:
+    raw = os.getenv("CORS_ORIGINS")
+    if raw is None or not str(raw).strip() or str(raw).strip() == "*":
+        return [
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://localhost:5174",
+            "http://127.0.0.1:5174",
+        ]
+    return [o.strip() for o in str(raw).split(",") if o.strip()]
+
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()],
-    allow_credentials=True,
+    allow_origins=_cors_origins(),
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
+    max_age=0,
 )
 
 
@@ -347,8 +843,267 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+def _usuario_as_out(row: UsuariosModel) -> UsuarioOut:
+    return UsuarioOut(
+        IdUsuarios=int(row.IdUsuario),
+        Usuario=str(row.Usuario),
+        TenantId=int(row.TenantId or 0),
+        Role=str(row.Role or ""),
+        Nome=str(row.Nome) if row.Nome is not None else None,
+        Funcao=str(row.Funcao) if row.Funcao is not None else None,
+        Perfil=str(row.Perfil) if row.Perfil is not None else None,
+        Permissao=str(row.Permissao) if row.Permissao is not None else None,
+        Celular=str(row.Celular) if row.Celular is not None else None,
+        Email=str(row.Email) if row.Email is not None else None,
+        Ativo=int(row.Ativo or 0),
+    )
+
+
+@app.get("/api/usuarios", response_model=list[UsuarioOut])
+def list_usuarios(
+    tenant_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    auth: dict[str, Any] = Depends(_require_admin),
+) -> list[UsuarioOut]:
+    stmt = select(UsuariosModel)
+    if _is_superadmin(auth):
+        if tenant_id is not None:
+            stmt = stmt.where(UsuariosModel.TenantId == int(tenant_id))
+    else:
+        stmt = stmt.where(UsuariosModel.TenantId == int(auth.get("tenant_id") or 0))
+    rows = db.execute(stmt.order_by(UsuariosModel.IdUsuario.asc())).scalars().all()
+    return [_usuario_as_out(r) for r in rows]
+
+
+@app.get("/api/usuarios/{id_usuario}", response_model=UsuarioOut)
+def get_usuario(
+    id_usuario: int,
+    db: Session = Depends(get_db),
+    auth: dict[str, Any] = Depends(_require_admin),
+) -> UsuarioOut:
+    row = db.get(UsuariosModel, int(id_usuario))
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuário não encontrado")
+    if not _is_superadmin(auth) and int(row.TenantId or 0) != int(auth.get("tenant_id") or 0):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Não autorizado")
+    return _usuario_as_out(row)
+
+
+@app.post("/api/usuarios", response_model=UsuarioOut, status_code=status.HTTP_201_CREATED)
+def create_usuario(
+    payload: UsuarioCreate,
+    db: Session = Depends(get_db),
+    auth: dict[str, Any] = Depends(_require_admin),
+) -> UsuarioOut:
+    username = payload.Usuario.strip()
+    if not username:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Usuário inválido")
+
+    tenant_id = int(payload.TenantId) if _is_superadmin(auth) and payload.TenantId is not None else int(auth.get("tenant_id") or 0)
+    if tenant_id <= 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tenant inválido")
+
+    role = str(payload.Role).strip().upper() if _is_superadmin(auth) and payload.Role else "USER"
+    if not role:
+        role = "USER"
+
+    existing = db.execute(select(UsuariosModel).where(UsuariosModel.Usuario == username)).scalar_one_or_none()
+    if existing:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Usuário já existe")
+
+    nome = payload.Nome.strip()
+    if not nome:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Nome inválido")
+
+    salt_hex = os.urandom(16).hex()
+    senha_hash = _pbkdf2_hash_password(payload.Senha, salt_hex)
+    row = UsuariosModel(
+        Usuario=username,
+        TenantId=tenant_id,
+        Role=role,
+        Nome=nome,
+        Funcao=payload.Funcao.strip() if isinstance(payload.Funcao, str) and payload.Funcao.strip() else None,
+        Perfil=payload.Perfil.strip() if isinstance(payload.Perfil, str) and payload.Perfil.strip() else None,
+        Permissao=payload.Permissao.strip() if isinstance(payload.Permissao, str) and payload.Permissao.strip() else None,
+        Celular=payload.Celular.strip() if isinstance(payload.Celular, str) and payload.Celular.strip() else None,
+        Email=payload.Email.strip() if isinstance(payload.Email, str) and payload.Email.strip() else None,
+        SenhaSalt=salt_hex,
+        SenhaHash=senha_hash,
+        Ativo=int(payload.Ativo or 0),
+    )
+    db.add(row)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Falha ao criar usuário")
+    db.refresh(row)
+    return _usuario_as_out(row)
+
+
+@app.put("/api/usuarios/{id_usuario}", response_model=UsuarioOut)
+def update_usuario(
+    id_usuario: int,
+    payload: UsuarioUpdate,
+    db: Session = Depends(get_db),
+    auth: dict[str, Any] = Depends(_require_admin),
+) -> UsuarioOut:
+    row = db.get(UsuariosModel, int(id_usuario))
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuário não encontrado")
+    if not _is_superadmin(auth) and int(row.TenantId or 0) != int(auth.get("tenant_id") or 0):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Não autorizado")
+
+    data: dict[str, Any] = payload.model_dump(exclude_unset=True)
+    if "Usuario" in data and isinstance(data.get("Usuario"), str):
+        v = data["Usuario"].strip()
+        if v:
+            row.Usuario = v
+    if "Funcao" in data:
+        v = data.get("Funcao")
+        row.Funcao = v.strip() if isinstance(v, str) and v.strip() else None
+    if "Nome" in data:
+        v = data.get("Nome")
+        row.Nome = v.strip() if isinstance(v, str) and v.strip() else None
+    if "Perfil" in data:
+        v = data.get("Perfil")
+        row.Perfil = v.strip() if isinstance(v, str) and v.strip() else None
+    if "Permissao" in data:
+        v = data.get("Permissao")
+        row.Permissao = v.strip() if isinstance(v, str) and v.strip() else None
+    if "Celular" in data:
+        v = data.get("Celular")
+        row.Celular = v.strip() if isinstance(v, str) and v.strip() else None
+    if "Email" in data:
+        v = data.get("Email")
+        row.Email = v.strip() if isinstance(v, str) and v.strip() else None
+    if "Ativo" in data and data.get("Ativo") is not None:
+        row.Ativo = int(data["Ativo"])
+
+    if _is_superadmin(auth):
+        if "TenantId" in data and data.get("TenantId") is not None:
+            row.TenantId = int(data["TenantId"])
+        if "Role" in data and isinstance(data.get("Role"), str) and str(data.get("Role")).strip():
+            row.Role = str(data["Role"]).strip().upper()
+
+    senha = data.get("Senha")
+    if isinstance(senha, str) and senha.strip():
+        salt_hex = os.urandom(16).hex()
+        row.SenhaSalt = salt_hex
+        row.SenhaHash = _pbkdf2_hash_password(senha, salt_hex)
+
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Falha ao atualizar usuário")
+    db.refresh(row)
+    return _usuario_as_out(row)
+
+
+@app.delete("/api/usuarios/{id_usuario}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_usuario(
+    id_usuario: int,
+    db: Session = Depends(get_db),
+    auth: dict[str, Any] = Depends(_require_admin),
+) -> None:
+    row = db.get(UsuariosModel, int(id_usuario))
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuário não encontrado")
+    if not _is_superadmin(auth) and int(row.TenantId or 0) != int(auth.get("tenant_id") or 0):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Não autorizado")
+    db.delete(row)
+    db.commit()
+
+
+@app.post("/api/login", response_model=LoginOut)
+def login(payload: LoginIn, db: Session = Depends(get_db)) -> LoginOut:
+    usuario_in = payload.Usuario.strip()
+    user = db.execute(select(UsuariosModel).where(UsuariosModel.Usuario == usuario_in)).scalar_one_or_none()
+    if not user:
+        user = db.execute(select(UsuariosModel).where(UsuariosModel.Usuario == usuario_in.upper())).scalar_one_or_none()
+    if not user:
+        user = db.execute(select(UsuariosModel).where(UsuariosModel.Usuario == usuario_in.lower())).scalar_one_or_none()
+    if not user or int(user.Ativo or 0) != 1:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Usuário inválido")
+
+    senha_hash = _pbkdf2_hash_password(payload.Senha, str(user.SenhaSalt))
+    if not hmac.compare_digest(str(user.SenhaHash), senha_hash):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Credenciais inválidas")
+
+    username_upper = str(user.Usuario or "").upper()
+    is_admin_user = username_upper in {"ADMINISTRADOR", "ADMINISTRATOR"}
+    is_superadmin = str(user.Role or "").upper() == "SUPERADMIN"
+
+    tenant: Optional[TenantsModel] = None
+    if is_admin_user:
+        tenant = db.execute(select(TenantsModel).where(TenantsModel.Slug == "executive")).scalar_one_or_none()
+        if not tenant or not is_superadmin:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Não autorizado")
+        if int(user.TenantId or 0) != int(tenant.IdTenant):
+            user.TenantId = int(tenant.IdTenant)
+            db.commit()
+            db.refresh(user)
+    else:
+        tenant_slug_raw = str(payload.TenantSlug or "").strip().lower()
+        if not tenant_slug_raw:
+            u = str(user.Usuario or "").strip()
+            if u.upper().startswith("ADMIN.") and len(u) > 6:
+                inferred = u.split(".", 1)[1].strip().lower()
+                tenant_slug_raw = inferred
+        if tenant_slug_raw:
+            tenant = db.execute(select(TenantsModel).where(TenantsModel.Slug == tenant_slug_raw)).scalar_one_or_none()
+            if not tenant:
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Tenant inválido")
+            if int(user.TenantId) != int(tenant.IdTenant):
+                old_tenant = db.get(TenantsModel, int(user.TenantId))
+                old_slug = str(old_tenant.Slug).strip().lower() if old_tenant else ""
+                if not old_tenant or old_slug == tenant_slug_raw:
+                    user.TenantId = int(tenant.IdTenant)
+                    db.commit()
+                    db.refresh(user)
+                else:
+                    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Não autorizado")
+        else:
+            tenant = db.get(TenantsModel, int(user.TenantId))
+            if not tenant:
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Tenant inválido")
+
+    exp = time.time() + 60 * 60 * 12
+    token = _sign_token(
+        {
+            "sub": str(user.Usuario),
+            "role": str(user.Role),
+            "tenant_id": int(tenant.IdTenant),
+            "tenant_slug": str(tenant.Slug),
+            "exp": exp,
+        }
+    )
+
+    return LoginOut(
+        token=token,
+        usuario=str(user.Usuario),
+        role=str(user.Role),
+        nome=str(user.Nome).strip() if user.Nome is not None and str(user.Nome).strip() else None,
+        perfil=str(user.Perfil).strip() if user.Perfil is not None and str(user.Perfil).strip() else None,
+        tenant=TenantOut(
+            IdTenant=tenant.IdTenant,
+            Tenant=tenant.Tenant,
+            Slug=tenant.Slug,
+            DataCriacao=tenant.DataCriacao,
+            DataUpdate=tenant.DataUpdate,
+            Cadastrante=tenant.Cadastrante,
+        ),
+        superadmin=bool(is_admin_user and is_superadmin and str(tenant.Slug) == "executive"),
+    )
+
+
 @app.get("/api/executivos", response_model=list[ExecutivoOut])
-def list_executivos(empresa: Optional[str] = None, db: Session = Depends(get_db)) -> list[ExecutivoOut]:
+def list_executivos(
+    empresa: Optional[str] = None, db: Session = Depends(get_db), auth: Optional[dict[str, Any]] = Depends(_get_auth)
+) -> list[ExecutivoOut]:
+    if not empresa and not (_is_superadmin(auth) or _is_executive_tenant(auth)):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Não autorizado")
     stmt = select(ExecutivoModel)
     if empresa:
         stmt = stmt.where(ExecutivoModel.Empresa == empresa)
@@ -456,7 +1211,11 @@ def _ativo_as_out(row: AtivoModel) -> AtivoOut:
 
 
 @app.get("/api/ativos", response_model=list[AtivoOut])
-def list_ativos(empresa: Optional[str] = None, db: Session = Depends(get_db)) -> list[AtivoOut]:
+def list_ativos(
+    empresa: Optional[str] = None, db: Session = Depends(get_db), auth: Optional[dict[str, Any]] = Depends(_get_auth)
+) -> list[AtivoOut]:
+    if not empresa and not (_is_superadmin(auth) or _is_executive_tenant(auth)):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Não autorizado")
     stmt = select(AtivoModel)
     if empresa:
         stmt = stmt.where(AtivoModel.Empresa == empresa)
@@ -541,7 +1300,11 @@ def _centro_custos_as_out(row: CentroCustosModel) -> CentroCustosOut:
 
 
 @app.get("/api/centro-custos", response_model=list[CentroCustosOut])
-def list_centro_custos(empresa: Optional[str] = None, db: Session = Depends(get_db)) -> list[CentroCustosOut]:
+def list_centro_custos(
+    empresa: Optional[str] = None, db: Session = Depends(get_db), auth: Optional[dict[str, Any]] = Depends(_get_auth)
+) -> list[CentroCustosOut]:
+    if not empresa and not (_is_superadmin(auth) or _is_executive_tenant(auth)):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Não autorizado")
     stmt = select(CentroCustosModel)
     if empresa:
         stmt = stmt.where(CentroCustosModel.Empresa == empresa)
@@ -605,6 +1368,342 @@ def delete_centro_custos(id_custos: int, db: Session = Depends(get_db)) -> None:
     row = db.get(CentroCustosModel, id_custos)
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Centro de custos não encontrado")
+    db.delete(row)
+    db.commit()
+
+
+def _sanitize_identifier(value: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9_]+", "_", str(value or "")).strip("_")
+    cleaned = re.sub(r"_+", "_", cleaned)
+    if not cleaned:
+        cleaned = "tenant"
+    if re.match(r"^[0-9]", cleaned):
+        cleaned = f"t_{cleaned}"
+    return cleaned[:63]
+
+
+def _sanitize_db_name(value: str) -> str:
+    raw = str(value or "").strip().lower()
+    raw = re.sub(r"[^a-z0-9_-]+", "_", raw)
+    raw = re.sub(r"_+", "_", raw)
+    raw = re.sub(r"-+", "-", raw)
+    raw = raw.strip("_-")
+    if not raw:
+        raw = "tenant"
+    if len(raw) > 63:
+        raw = raw[:63]
+    return raw
+
+
+def _tenant_db_name(*, tenant_id: int, slug: str) -> str:
+    return _sanitize_db_name(f"{str(slug or '').strip().lower()}-{int(tenant_id)}")
+
+
+def _tenant_engine(*, db_name: str) -> Engine:
+    url = make_url(DATABASE_URL)
+    tenant_url = url.set(database=db_name)
+    tenant_url_str = tenant_url.render_as_string(hide_password=False)
+    connect_args = _connect_args(tenant_url_str)
+    return create_engine(tenant_url_str, connect_args=connect_args, pool_pre_ping=True)
+
+
+def _seed_tenant_admin_user(*, db_name: str, tenant_id: int, slug: str) -> None:
+    if not DATABASE_URL.startswith("postgresql"):
+        return
+
+    if str(slug).lower() == "executive":
+        return
+
+    admin_username = f"ADMIN.{str(slug).upper()}"
+    tenant_engine = _tenant_engine(db_name=db_name)
+    TenantSession = sessionmaker(bind=tenant_engine, autoflush=False, autocommit=False)
+    with TenantSession() as db:
+        existing = db.execute(select(UsuariosModel).where(UsuariosModel.Usuario == admin_username)).scalar_one_or_none()
+        if existing:
+            if int(existing.TenantId) != int(tenant_id):
+                existing.TenantId = int(tenant_id)
+            existing.Role = "ADMIN"
+            existing.Ativo = 1
+            db.commit()
+            return
+
+        salt_hex = os.urandom(16).hex()
+        senha_hash = _pbkdf2_hash_password("admin", salt_hex)
+        db.add(
+            UsuariosModel(
+                Usuario=admin_username,
+                TenantId=int(tenant_id),
+                Role="ADMIN",
+                SenhaSalt=salt_hex,
+                SenhaHash=senha_hash,
+                Ativo=1,
+            )
+        )
+        db.commit()
+
+
+def _create_db_schema(db_name: str, schema_name: str) -> None:
+    if not DATABASE_URL.startswith("postgresql"):
+        return
+
+    db_name = _sanitize_db_name(db_name)
+    schema_name = _sanitize_identifier(schema_name)
+
+    url = make_url(DATABASE_URL)
+    admin_db = os.getenv("POSTGRES_ADMIN_DB")
+    if not admin_db or not str(admin_db).strip():
+        admin_db = str(url.database or "").strip() or "postgres"
+    admin_url = url.set(database=admin_db)
+
+    admin_url_str = admin_url.render_as_string(hide_password=False)
+    admin_connect_args = _connect_args(admin_url_str)
+    admin_engine = create_engine(
+        admin_url_str,
+        connect_args=admin_connect_args,
+        isolation_level="AUTOCOMMIT",
+        pool_pre_ping=True,
+    )
+    with admin_engine.connect() as conn:
+        exists = conn.execute(text("select 1 from pg_database where datname=:n"), {"n": db_name}).first()
+        if not exists:
+            conn.exec_driver_sql(f'CREATE DATABASE "{db_name}"')
+
+    tenant_engine = _tenant_engine(db_name=db_name)
+    with tenant_engine.connect() as conn:
+        conn.exec_driver_sql(f'CREATE SCHEMA IF NOT EXISTS "{schema_name}"')
+        conn.commit()
+
+    meta = MetaData()
+    meta.reflect(bind=engine, schema=schema_name)
+
+    tenants_table_names = {"tenant", "tenants"}
+    for table in list(meta.tables.values()):
+        if str(getattr(table, "schema", "") or "") != schema_name:
+            continue
+        if str(getattr(table, "name", "") or "").lower() in tenants_table_names:
+            meta.remove(table)
+
+    for table in list(meta.tables.values()):
+        for constraint in list(table.constraints):
+            if not isinstance(constraint, ForeignKeyConstraint):
+                continue
+            if any(
+                str(getattr(elem.column.table, "schema", "") or "") == schema_name
+                and str(getattr(elem.column.table, "name", "") or "").lower() in tenants_table_names
+                for elem in constraint.elements
+            ):
+                table.constraints.discard(constraint)
+
+    meta.create_all(bind=tenant_engine, checkfirst=True)
+
+
+def _tenant_as_out(row: TenantsModel) -> TenantOut:
+    return TenantOut(
+        IdTenant=row.IdTenant,
+        Tenant=row.Tenant,
+        Slug=row.Slug,
+        DataCriacao=row.DataCriacao,
+        DataUpdate=row.DataUpdate,
+        Cadastrante=row.Cadastrante,
+    )
+
+
+@app.get("/api/tenants", response_model=list[TenantOut])
+def list_tenants(db: Session = Depends(get_db), auth: dict[str, Any] = Depends(_require_superadmin)) -> list[TenantOut]:
+    rows = db.execute(select(TenantsModel).order_by(TenantsModel.IdTenant.asc())).scalars().all()
+    return [_tenant_as_out(r) for r in rows]
+
+
+@app.get("/api/tenants/{id_tenant}", response_model=TenantOut)
+def get_tenant(id_tenant: int, db: Session = Depends(get_db), auth: dict[str, Any] = Depends(_require_superadmin)) -> TenantOut:
+    row = db.get(TenantsModel, id_tenant)
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant não encontrado")
+    return _tenant_as_out(row)
+
+
+@app.post("/api/tenants", response_model=TenantOut, status_code=status.HTTP_201_CREATED)
+def create_tenant(payload: TenantCreate, db: Session = Depends(get_db), auth: dict[str, Any] = Depends(_require_superadmin)) -> TenantOut:
+    tenant_name = payload.Tenant.strip()
+    slug_raw = payload.Slug.strip().lower()
+    if not slug_raw:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Slug inválido")
+
+    existing = db.execute(select(TenantsModel).where(TenantsModel.Slug == slug_raw)).scalar_one_or_none()
+    if existing:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Slug já existe")
+
+    today = date.today()
+    row = TenantsModel(
+        Tenant=tenant_name,
+        Slug=slug_raw,
+        DataCriacao=today,
+        DataUpdate=today,
+        Cadastrante=payload.Cadastrante.strip() if isinstance(payload.Cadastrante, str) else None,
+    )
+    db.add(row)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Falha ao criar tenant")
+    db.refresh(row)
+
+    db_name = _tenant_db_name(tenant_id=int(row.IdTenant), slug=str(row.Slug))
+    try:
+        _create_db_schema(db_name, SCHEMA_NAME)
+        _seed_tenant_admin_user(db_name=db_name, tenant_id=int(row.IdTenant), slug=str(row.Slug))
+    except Exception as e:
+        try:
+            db.delete(row)
+            db.commit()
+        except Exception:
+            pass
+        safe_db = _sanitize_db_name(db_name)
+        safe_schema = _sanitize_identifier(SCHEMA_NAME)
+        orig = getattr(e, "orig", None)
+        msg = str(orig or e or "").strip()
+        msg = re.sub(r"\s+", " ", msg).strip()
+        if not msg:
+            msg = str(e.__class__.__name__)
+        if len(msg) > 240:
+            msg = msg[:240].rstrip() + "..."
+        detail = f'Falha ao provisionar banco/schema do tenant (db="{safe_db}", schema="{safe_schema}"): {msg}'
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=detail)
+
+    if str(row.Slug).lower() != "executive":
+        admin_username = f"ADMIN.{str(row.Slug).upper()}"
+        existing_admin = db.execute(select(UsuariosModel).where(UsuariosModel.Usuario == admin_username)).scalar_one_or_none()
+        if existing_admin:
+            if int(existing_admin.TenantId or 0) != int(row.IdTenant):
+                existing_admin.TenantId = int(row.IdTenant)
+            existing_admin.Role = "ADMIN"
+            existing_admin.Ativo = 1
+            db.commit()
+        else:
+            salt_hex = os.urandom(16).hex()
+            senha_hash = _pbkdf2_hash_password("admin", salt_hex)
+            db.add(
+                UsuariosModel(
+                    Usuario=admin_username,
+                    TenantId=int(row.IdTenant),
+                    Role="ADMIN",
+                    SenhaSalt=salt_hex,
+                    SenhaHash=senha_hash,
+                    Ativo=1,
+                )
+            )
+            try:
+                db.commit()
+            except IntegrityError:
+                db.rollback()
+                existing_admin = db.execute(select(UsuariosModel).where(UsuariosModel.Usuario == admin_username)).scalar_one_or_none()
+                if not existing_admin or int(existing_admin.TenantId) != int(row.IdTenant):
+                    raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Falha ao criar usuário do tenant")
+
+    return _tenant_as_out(row)
+
+
+@app.put("/api/tenants/{id_tenant}", response_model=TenantOut)
+def update_tenant(
+    id_tenant: int, payload: TenantUpdate, db: Session = Depends(get_db), auth: dict[str, Any] = Depends(_require_superadmin)
+) -> TenantOut:
+    row = db.get(TenantsModel, id_tenant)
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant não encontrado")
+
+    old_slug = str(row.Slug or "")
+    data: dict[str, Any] = payload.model_dump(exclude_unset=True)
+    if "Tenant" in data and isinstance(data.get("Tenant"), str):
+        row.Tenant = data["Tenant"].strip()
+    if "Slug" in data and isinstance(data.get("Slug"), str):
+        slug_raw = data["Slug"].strip().lower()
+        if not slug_raw:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Slug inválido")
+        existing = db.execute(select(TenantsModel).where(TenantsModel.Slug == slug_raw, TenantsModel.IdTenant != id_tenant)).scalar_one_or_none()
+        if existing:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Slug já existe")
+        row.Slug = slug_raw
+    if "Cadastrante" in data:
+        v = data.get("Cadastrante")
+        row.Cadastrante = v.strip() if isinstance(v, str) else None
+
+    row.DataUpdate = date.today()
+
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Falha ao atualizar tenant")
+    db.refresh(row)
+
+    db_name = _tenant_db_name(tenant_id=int(row.IdTenant), slug=str(row.Slug))
+    try:
+        _create_db_schema(db_name, SCHEMA_NAME)
+        _seed_tenant_admin_user(db_name=db_name, tenant_id=int(row.IdTenant), slug=str(row.Slug))
+    except Exception as e:
+        safe_db = _sanitize_db_name(db_name)
+        safe_schema = _sanitize_identifier(SCHEMA_NAME)
+        orig = getattr(e, "orig", None)
+        msg = str(orig or e or "").strip()
+        msg = re.sub(r"\s+", " ", msg).strip()
+        if not msg:
+            msg = str(e.__class__.__name__)
+        if len(msg) > 240:
+            msg = msg[:240].rstrip() + "..."
+        detail = f'Falha ao provisionar banco/schema do tenant (db="{safe_db}", schema="{safe_schema}"): {msg}'
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=detail)
+
+    if str(row.Slug).lower() != "executive":
+        desired_username = f"ADMIN.{str(row.Slug).upper()}"
+        existing_desired = db.execute(select(UsuariosModel).where(UsuariosModel.Usuario == desired_username)).scalar_one_or_none()
+        if existing_desired:
+            if int(existing_desired.TenantId or 0) != int(row.IdTenant):
+                existing_desired.TenantId = int(row.IdTenant)
+            existing_desired.Role = "ADMIN"
+            existing_desired.Ativo = 1
+            db.commit()
+        else:
+            old_username = f"ADMIN.{old_slug.upper()}" if old_slug else ""
+            existing_old = (
+                db.execute(select(UsuariosModel).where(UsuariosModel.Usuario == old_username)).scalar_one_or_none()
+                if old_username
+                else None
+            )
+            if existing_old and int(existing_old.TenantId) == int(row.IdTenant):
+                existing_old.Usuario = desired_username
+                try:
+                    db.commit()
+                except IntegrityError:
+                    db.rollback()
+                    raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Falha ao atualizar usuário do tenant")
+            else:
+                salt_hex = os.urandom(16).hex()
+                senha_hash = _pbkdf2_hash_password("admin", salt_hex)
+                db.add(
+                    UsuariosModel(
+                        Usuario=desired_username,
+                        TenantId=int(row.IdTenant),
+                        Role="ADMIN",
+                        SenhaSalt=salt_hex,
+                        SenhaHash=senha_hash,
+                        Ativo=1,
+                    )
+                )
+                try:
+                    db.commit()
+                except IntegrityError:
+                    db.rollback()
+                    raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Falha ao criar usuário do tenant")
+
+    return _tenant_as_out(row)
+
+
+@app.delete("/api/tenants/{id_tenant}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_tenant(id_tenant: int, db: Session = Depends(get_db), auth: dict[str, Any] = Depends(_require_superadmin)) -> None:
+    row = db.get(TenantsModel, id_tenant)
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant não encontrado")
     db.delete(row)
     db.commit()
 

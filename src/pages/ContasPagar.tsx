@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Button, Input, Space, Tag, Typography, message } from 'antd';
+import { App as AntdApp, Button, Input, Space, Tag, Typography } from 'antd';
 import { PlusOutlined, EditOutlined, ReloadOutlined, DeleteOutlined, DownloadOutlined } from '@ant-design/icons';
 import { useTenant } from '../contexts/TenantContext';
 import ListGrid from '../components/ListGrid.tsx';
@@ -33,12 +33,19 @@ export type ContaPagar = {
 
 const apiBaseUrl = () => {
   const env = (import.meta as any).env || {};
-  return String(env.VITE_API_BASE_URL || 'http://localhost:8000');
+  return String(env.VITE_API_BASE_URL || 'http://127.0.0.1:8000');
 };
 
 const endpoint = () => `${apiBaseUrl()}/api/contas-pagar`;
 
 const { Title, Text } = Typography;
+
+const authHeaders = () => {
+  const token = localStorage.getItem('auth_token');
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return headers;
+};
 
 const statusPagamentoColor = (value?: string) => {
   const v = (value || '').toUpperCase();
@@ -48,8 +55,9 @@ const statusPagamentoColor = (value?: string) => {
 };
 
 const ContasPagar: React.FC = () => {
+  const { message } = AntdApp.useApp();
   const { currentTenant } = useTenant();
-  const empresaNome = currentTenant?.name || '';
+  const empresaNome = currentTenant?.id === 0 ? '' : currentTenant?.name || '';
 
   const [data, setData] = useState<ContaPagar[]>([]);
   const [loading, setLoading] = useState(false);
@@ -60,8 +68,8 @@ const ContasPagar: React.FC = () => {
   const fetchContasPagar = useCallback(async () => {
     setLoading(true);
     try {
-      const url = `${endpoint()}?empresa=${encodeURIComponent(empresaNome)}`;
-      const res = await fetch(url, { headers: { 'Content-Type': 'application/json' } });
+      const url = empresaNome ? `${endpoint()}?empresa=${encodeURIComponent(empresaNome)}` : endpoint();
+      const res = await fetch(url, { headers: authHeaders() });
       if (!res.ok) throw new Error(await res.text());
       const json = (await res.json()) as ContaPagar[];
       setData(Array.isArray(json) ? json : []);
@@ -71,7 +79,7 @@ const ContasPagar: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [empresaNome]);
+  }, [empresaNome, message]);
 
   useEffect(() => {
     fetchContasPagar();
@@ -108,7 +116,7 @@ const ContasPagar: React.FC = () => {
     const id = record.IdContasPagar;
     (async () => {
       try {
-        const res = await fetch(`${endpoint()}/${id}`, { method: 'DELETE' });
+        const res = await fetch(`${endpoint()}/${id}`, { method: 'DELETE', headers: authHeaders() });
         if (!res.ok && res.status !== 204) throw new Error(await res.text());
         message.success('Conta a pagar excluída');
         fetchContasPagar();
@@ -131,7 +139,7 @@ const ContasPagar: React.FC = () => {
       if (editing?.IdContasPagar) {
         const res = await fetch(`${endpoint()}/${editing.IdContasPagar}`, {
           method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
+          headers: authHeaders(),
           body: JSON.stringify(payload),
         });
         if (!res.ok) throw new Error(await res.text());
@@ -139,7 +147,7 @@ const ContasPagar: React.FC = () => {
       } else {
         const res = await fetch(endpoint(), {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: authHeaders(),
           body: JSON.stringify(payload),
         });
         if (!res.ok) throw new Error(await res.text());
@@ -149,7 +157,12 @@ const ContasPagar: React.FC = () => {
       if (values.documentoFile) {
         const formData = new FormData();
         formData.append('file', values.documentoFile);
-        const res = await fetch(`${endpoint()}/${saved.IdContasPagar}/documento`, { method: 'POST', body: formData });
+        const authorization = authHeaders().Authorization;
+        const res = await fetch(`${endpoint()}/${saved.IdContasPagar}/documento`, {
+          method: 'POST',
+          headers: authorization ? { Authorization: authorization } : undefined,
+          body: formData,
+        });
         if (!res.ok) throw new Error(await res.text());
       }
 
@@ -161,6 +174,24 @@ const ContasPagar: React.FC = () => {
       message.error('Falha ao salvar conta a pagar');
     }
   };
+
+  const handleBaixarDocumento = useCallback(
+    async (id: number) => {
+      try {
+        const url = `${apiBaseUrl()}/api/contas-pagar/${id}/documento`;
+        const authorization = authHeaders().Authorization;
+        const res = await fetch(url, { headers: authorization ? { Authorization: authorization } : undefined });
+        if (!res.ok) throw new Error(await res.text());
+        const blob = await res.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        window.open(blobUrl, '_blank', 'noopener,noreferrer');
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+      } catch {
+        message.error('Falha ao baixar documento');
+      }
+    },
+    [message]
+  );
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
@@ -227,7 +258,7 @@ const ContasPagar: React.FC = () => {
                 <Button
                   type="link"
                   icon={<DownloadOutlined />}
-                  onClick={() => window.open(`${apiBaseUrl()}/api/contas-pagar/${record.IdContasPagar}/documento`, '_blank')}
+                  onClick={() => handleBaixarDocumento(record.IdContasPagar)}
                 >
                   Baixar
                 </Button>

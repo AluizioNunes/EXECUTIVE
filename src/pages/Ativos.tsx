@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Button, Input, Modal, Space, Typography, message } from 'antd';
+import { App as AntdApp, Button, Input, Space, Typography } from 'antd';
 import { DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useTenant } from '../contexts/TenantContext';
-import ListGrid from '../components/ListGrid';
-import AtivosModal from '../components/AtivosModal';
+import ListGrid from '../components/ListGrid.tsx';
+import AtivosModal from '../components/AtivosModal.tsx';
 
 export type Ativo = {
   IdAtivo: number;
@@ -21,28 +21,36 @@ export type Ativo = {
 
 const apiBaseUrl = () => {
   const env = (import.meta as any).env || {};
-  return String(env.VITE_API_BASE_URL || 'http://localhost:8000');
+  return String(env.VITE_API_BASE_URL || 'http://127.0.0.1:8000');
 };
 
 const endpoint = () => `${apiBaseUrl()}/api/ativos`;
 
 const { Title, Text } = Typography;
 
+const authHeaders = () => {
+  const token = localStorage.getItem('auth_token');
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return headers;
+};
+
 const Ativos: React.FC = () => {
   const { currentTenant } = useTenant();
-  const empresaNome = currentTenant?.name || '';
+  const empresaNome = currentTenant?.id === 0 ? '' : currentTenant?.name || '';
 
   const [data, setData] = useState<Ativo[]>([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Ativo | null>(null);
+  const { message, modal } = AntdApp.useApp();
 
   const fetchAtivos = useCallback(async () => {
     setLoading(true);
     try {
       const url = empresaNome ? `${endpoint()}?empresa=${encodeURIComponent(empresaNome)}` : endpoint();
-      const res = await fetch(url, { headers: { 'Content-Type': 'application/json' } });
+      const res = await fetch(url, { headers: authHeaders() });
       if (!res.ok) throw new Error(await res.text());
       const json = (await res.json()) as Ativo[];
       setData(Array.isArray(json) ? json : []);
@@ -52,7 +60,7 @@ const Ativos: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [empresaNome]);
+  }, [empresaNome, message]);
 
   useEffect(() => {
     fetchAtivos();
@@ -91,7 +99,7 @@ const Ativos: React.FC = () => {
   };
 
   const handleExcluir = (record: Ativo) => {
-    Modal.confirm({
+    modal.confirm({
       title: 'Excluir Ativo',
       content: `Deseja excluir o ativo "${record.Ativo}"?`,
       okText: 'Excluir',
@@ -99,7 +107,7 @@ const Ativos: React.FC = () => {
       cancelText: 'Cancelar',
       onOk: async () => {
         try {
-          const res = await fetch(`${endpoint()}/${record.IdAtivo}`, { method: 'DELETE' });
+          const res = await fetch(`${endpoint()}/${record.IdAtivo}`, { method: 'DELETE', headers: authHeaders() });
           if (!res.ok && res.status !== 204) throw new Error(await res.text());
           message.success('Ativo excluído');
           fetchAtivos();
@@ -128,7 +136,7 @@ const Ativos: React.FC = () => {
       if (editing?.IdAtivo) {
         const res = await fetch(`${endpoint()}/${editing.IdAtivo}`, {
           method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
+          headers: authHeaders(),
           body: JSON.stringify(payload),
         });
         if (!res.ok) throw new Error(await res.text());
@@ -136,7 +144,7 @@ const Ativos: React.FC = () => {
       } else {
         const res = await fetch(endpoint(), {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: authHeaders(),
           body: JSON.stringify(payload),
         });
         if (!res.ok) throw new Error(await res.text());
@@ -209,11 +217,10 @@ const Ativos: React.FC = () => {
           setModalOpen(false);
           setEditing(null);
         }}
-        onSave={(values) => handleSalvar(values)}
+        onSave={handleSalvar}
       />
     </Space>
   );
 };
 
 export default Ativos;
-

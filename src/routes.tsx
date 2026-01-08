@@ -23,6 +23,7 @@ import ContasPagar from './pages/ContasPagar.tsx';
 import ExecutivosPage from './pages/Executivos';
 import Ativos from './pages/Ativos';
 import CentroCustos from './pages/CentroCustos';
+import Tenants from './pages/Tenants';
 
 // Wrapper components para passar tenant para as páginas
 const TenantAwarePageWrapper: React.FC<{ Component: React.ComponentType }> = ({ Component }) => {
@@ -70,6 +71,7 @@ const router = createBrowserRouter([
       { path: 'sistema/perfil', element: <TenantAwarePageWrapper Component={Perfil} /> },
       { path: 'sistema/permissoes', element: <TenantAwarePageWrapper Component={PermissoesPage} /> },
       { path: 'sistema/empresas', element: <TenantAwarePageWrapper Component={Empresas} /> },
+      { path: 'sistema/tenants', element: <TenantAwarePageWrapper Component={Tenants} /> },
     ],
   },
   // Rotas específicas por tenant (opcional)
@@ -108,6 +110,7 @@ const router = createBrowserRouter([
       { path: 'sistema/perfil', element: <TenantAwarePageWrapper Component={Perfil} /> },
       { path: 'sistema/permissoes', element: <TenantAwarePageWrapper Component={PermissoesPage} /> },
       { path: 'sistema/empresas', element: <TenantAwarePageWrapper Component={Empresas} /> },
+      { path: 'sistema/tenants', element: <TenantAwarePageWrapper Component={Tenants} /> },
     ],
   },
 ]);

@@ -3,6 +3,7 @@ name: itfact-executive
 services:
   postgres:
     image: postgres:latest
+    container_name: POSTGRESQL
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
@@ -20,8 +21,9 @@ services:
       timeout: 5s
       retries: 20
 
-  mongodb:
+  MONGODB:
     image: mongo:latest
+    container_name: MONGODB
     ports:
       - "27017:27017"
     volumes:
@@ -35,15 +37,17 @@ services:
       timeout: 5s
       retries: 20
 
-  api:
+  FASTAPI:
     build:
       context: ./Backend/FastAPI
+    image: itfact-executive-fastapi
+    container_name: FASTAPI
     ports:
       - "8000:8000"
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-executive}?options=-csearch_path%3D%22EXECUTIVE%22
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
-      NESTJS_BASE_URL: ${NESTJS_BASE_URL:-http://mongo-backend:3000}
+      NESTJS_BASE_URL: ${NESTJS_BASE_URL:-http://NESTJS:3000}
     depends_on:
       postgres:
         condition: service_healthy
@@ -51,13 +55,15 @@ services:
       - app-network
     restart: unless-stopped
   
-  mongo-backend:
+  NESTJS:
     build: 
       context: ./Backend/NestJS
+    image: itfact-executive-nestjs
+    container_name: NESTJS
     ports:
       - "3000:3000"
     environment:
-      MONGODB_URI: ${MONGODB_URI:-mongodb://mongodb:27017/executive}
+      MONGODB_URI: ${MONGODB_URI:-mongodb://MONGODB:27017/executive}
       NODE_ENV: ${NODE_ENV:-development}
       DB_HOST: ${DB_HOST:-postgres}
       DB_PORT: ${DB_PORT:-5432}
@@ -66,7 +72,7 @@ services:
       DB_NAME: ${POSTGRES_DB:-executive}
       DB_SCHEMA: ${DB_SCHEMA:-EXECUTIVE}
     depends_on:
-      mongodb:
+      MONGODB:
         condition: service_healthy
       postgres:
         condition: service_healthy
@@ -76,11 +82,28 @@ services:
 
   frontend:
     build: .
+    container_name: FRONTEND
     ports:
       - "80:80"
       - "443:443"
     depends_on:
-      - api
+      - FASTAPI
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:latest
+    container_name: NGINX
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  redis:
+    image: redis:latest
+    container_name: REDIS
+    ports:
+      - "6379:6379"
     networks:
       - app-network
     restart: unless-stopped

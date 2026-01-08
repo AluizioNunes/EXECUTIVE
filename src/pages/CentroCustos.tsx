@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Button, Input, Modal, Space, Typography, message } from 'antd';
+import { App as AntdApp, Button, Input, Space, Typography } from 'antd';
 import { DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useTenant } from '../contexts/TenantContext';
 import ListGrid from '../components/ListGrid.tsx';
-import CentroCustosModal from '../components/CentroCustosModal';
+import CentroCustosModal from '../components/CentroCustosModal.tsx';
 
 export type CentroCusto = {
   IdCustos: number;
@@ -19,28 +19,36 @@ export type CentroCusto = {
 
 const apiBaseUrl = () => {
   const env = (import.meta as any).env || {};
-  return String(env.VITE_API_BASE_URL || 'http://localhost:8000');
+  return String(env.VITE_API_BASE_URL || 'http://127.0.0.1:8000');
 };
 
 const endpoint = () => `${apiBaseUrl()}/api/centro-custos`;
 
 const { Title, Text } = Typography;
 
+const authHeaders = () => {
+  const token = localStorage.getItem('auth_token');
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return headers;
+};
+
 const CentroCustos: React.FC = () => {
   const { currentTenant } = useTenant();
-  const empresaNome = currentTenant?.name || '';
+  const empresaNome = currentTenant?.id === 0 ? '' : currentTenant?.name || '';
 
   const [data, setData] = useState<CentroCusto[]>([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<CentroCusto | null>(null);
+  const { message, modal } = AntdApp.useApp();
 
   const fetchCentroCustos = useCallback(async () => {
     setLoading(true);
     try {
-      const url = `${endpoint()}?empresa=${encodeURIComponent(empresaNome)}`;
-      const res = await fetch(url, { headers: { 'Content-Type': 'application/json' } });
+      const url = empresaNome ? `${endpoint()}?empresa=${encodeURIComponent(empresaNome)}` : endpoint();
+      const res = await fetch(url, { headers: authHeaders() });
       if (!res.ok) throw new Error(await res.text());
       const json = (await res.json()) as CentroCusto[];
       setData(Array.isArray(json) ? json : []);
@@ -50,7 +58,7 @@ const CentroCustos: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [empresaNome]);
+  }, [empresaNome, message]);
 
   useEffect(() => {
     fetchCentroCustos();
@@ -86,7 +94,7 @@ const CentroCustos: React.FC = () => {
   };
 
   const handleExcluir = (record: CentroCusto) => {
-    Modal.confirm({
+    modal.confirm({
       title: 'Excluir Centro de Custos',
       content: `Deseja excluir o centro de custos "${record.Nome}"?`,
       okText: 'Excluir',
@@ -94,7 +102,7 @@ const CentroCustos: React.FC = () => {
       cancelText: 'Cancelar',
       onOk: async () => {
         try {
-          const res = await fetch(`${endpoint()}/${record.IdCustos}`, { method: 'DELETE' });
+          const res = await fetch(`${endpoint()}/${record.IdCustos}`, { method: 'DELETE', headers: authHeaders() });
           if (!res.ok && res.status !== 204) throw new Error(await res.text());
           message.success('Centro de custos excluído');
           fetchCentroCustos();
@@ -121,7 +129,7 @@ const CentroCustos: React.FC = () => {
       if (editing?.IdCustos) {
         const res = await fetch(`${endpoint()}/${editing.IdCustos}`, {
           method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
+          headers: authHeaders(),
           body: JSON.stringify(payload),
         });
         if (!res.ok) throw new Error(await res.text());
@@ -129,7 +137,7 @@ const CentroCustos: React.FC = () => {
       } else {
         const res = await fetch(endpoint(), {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: authHeaders(),
           body: JSON.stringify(payload),
         });
         if (!res.ok) throw new Error(await res.text());
@@ -202,11 +210,10 @@ const CentroCustos: React.FC = () => {
           setModalOpen(false);
           setEditing(null);
         }}
-        onSave={(values) => handleSalvar(values)}
+        onSave={handleSalvar}
       />
     </Space>
   );
 };
 
 export default CentroCustos;
-

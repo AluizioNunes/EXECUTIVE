@@ -82,9 +82,15 @@ export const useTenantData = () => {
       
       // Simulate API call delay
       setTimeout(() => {
-        setExecutives(mockExecutives[currentTenant.id] || []);
-        setMeetings(mockMeetings[currentTenant.id] || []);
-        setTasks(mockTasks[currentTenant.id] || []);
+        if (currentTenant.id === 0) {
+          setExecutives(Object.values(mockExecutives).flat());
+          setMeetings(Object.values(mockMeetings).flat());
+          setTasks(Object.values(mockTasks).flat());
+        } else {
+          setExecutives(mockExecutives[currentTenant.id] || []);
+          setMeetings(mockMeetings[currentTenant.id] || []);
+          setTasks(mockTasks[currentTenant.id] || []);
+        }
         setDataLoading(false);
       }, 300);
     } else {
