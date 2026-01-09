@@ -33,6 +33,8 @@ const authHeaders = () => {
   return headers;
 };
 
+const isExecutiveAuth = () => String(localStorage.getItem('auth_tenant_slug') || '').toLowerCase() === 'executive';
+
 const CentroCustos: React.FC = () => {
   const { currentTenant } = useTenant();
   const empresaNome = currentTenant?.id === 0 ? '' : currentTenant?.name || '';
@@ -102,7 +104,9 @@ const CentroCustos: React.FC = () => {
       cancelText: 'Cancelar',
       onOk: async () => {
         try {
-          const res = await fetch(`${endpoint()}/${record.IdCustos}`, { method: 'DELETE', headers: authHeaders() });
+          const tenantQuery =
+            isExecutiveAuth() && currentTenant?.id && currentTenant.id !== 0 ? `?tenant_id=${currentTenant.id}` : '';
+          const res = await fetch(`${endpoint()}/${record.IdCustos}${tenantQuery}`, { method: 'DELETE', headers: authHeaders() });
           if (!res.ok && res.status !== 204) throw new Error(await res.text());
           message.success('Centro de custos excluído');
           fetchCentroCustos();
@@ -126,8 +130,10 @@ const CentroCustos: React.FC = () => {
     };
 
     try {
+      const tenantQuery =
+        isExecutiveAuth() && currentTenant?.id && currentTenant.id !== 0 ? `?tenant_id=${currentTenant.id}` : '';
       if (editing?.IdCustos) {
-        const res = await fetch(`${endpoint()}/${editing.IdCustos}`, {
+        const res = await fetch(`${endpoint()}/${editing.IdCustos}${tenantQuery}`, {
           method: 'PUT',
           headers: authHeaders(),
           body: JSON.stringify(payload),
@@ -135,7 +141,7 @@ const CentroCustos: React.FC = () => {
         if (!res.ok) throw new Error(await res.text());
         message.success('Centro de custos atualizado');
       } else {
-        const res = await fetch(endpoint(), {
+        const res = await fetch(`${endpoint()}${tenantQuery}`, {
           method: 'POST',
           headers: authHeaders(),
           body: JSON.stringify(payload),

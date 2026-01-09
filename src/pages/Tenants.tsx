@@ -3,6 +3,7 @@ import { App as AntdApp, Button, Input, Space, Typography } from 'antd';
 import { DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import ListGrid from '../components/ListGrid.tsx';
 import TenantsModal from '../components/TenantsModal.tsx';
+import { useTenant } from '../contexts/TenantContext';
 
 export type TenantRecord = {
   IdTenant: number;
@@ -58,6 +59,7 @@ const Tenants: React.FC = () => {
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<TenantRecord | null>(null);
   const { message, modal } = AntdApp.useApp();
+  const { refreshTenantData } = useTenant();
 
   const fetchTenants = useCallback(async () => {
     setLoading(true);
@@ -113,28 +115,55 @@ const Tenants: React.FC = () => {
   };
 
   const handleExcluir = (record: TenantRecord) => {
+    const doDelete = async (opts: { deleteDb: boolean }) => {
+      try {
+        const url = opts.deleteDb ? `${endpoint()}/${record.IdTenant}?delete_db=1` : `${endpoint()}/${record.IdTenant}`;
+        const res = await fetch(url, { method: 'DELETE', headers: authHeaders() });
+        if (!res.ok && res.status !== 204) throw new ApiError(res.status, errorTextFromBody(await res.text()));
+        message.success(opts.deleteDb ? 'Tenant e banco deletados' : 'Tenant excluído');
+        refreshTenantData();
+        fetchTenants();
+      } catch (err) {
+        const status = err instanceof ApiError ? err.status : undefined;
+        if (status === 401) {
+          localStorage.removeItem('auth_token');
+          message.error('Não autorizado. Faça login novamente.');
+          return;
+        }
+        const detail = err instanceof Error ? err.message : 'Falha ao excluir tenant';
+        message.error(status ? `Falha ao excluir tenant (${status}): ${detail}` : detail);
+      }
+    };
+
     modal.confirm({
       title: 'Excluir Tenant',
-      content: `Deseja excluir o tenant "${record.Tenant}"?`,
-      okText: 'Excluir',
+      content: `Quero deletar o tenant "${record.Tenant}"?`,
+      okText: 'Sim',
       okType: 'danger',
-      cancelText: 'Cancelar',
+      cancelText: 'Não',
       onOk: async () => {
-        try {
-          const res = await fetch(`${endpoint()}/${record.IdTenant}`, { method: 'DELETE', headers: authHeaders() });
-          if (!res.ok && res.status !== 204) throw new ApiError(res.status, errorTextFromBody(await res.text()));
-          message.success('Tenant excluído');
-          fetchTenants();
-        } catch (err) {
-          const status = err instanceof ApiError ? err.status : undefined;
-          if (status === 401) {
-            localStorage.removeItem('auth_token');
-            message.error('Não autorizado. Faça login novamente.');
-            return;
-          }
-          const detail = err instanceof Error ? err.message : 'Falha ao excluir tenant';
-          message.error(status ? `Falha ao excluir tenant (${status}): ${detail}` : detail);
-        }
+        modal.confirm({
+          title: 'Excluir Banco de Dados',
+          content: `Quero deletar também o banco de dados do tenant "${record.Tenant}"?`,
+          okText: 'Sim',
+          okType: 'danger',
+          cancelText: 'Não',
+          onOk: async () => {
+            await doDelete({ deleteDb: true });
+          },
+          onCancel: () => {
+            modal.confirm({
+              title: 'Excluir Apenas o Tenant',
+              content: `Quero deletar só o tenant "${record.Tenant}"?`,
+              okText: 'Sim',
+              okType: 'danger',
+              cancelText: 'Não (cancelar)',
+              onOk: async () => {
+                await doDelete({ deleteDb: false });
+              },
+            });
+          },
+        });
       },
     });
   };
@@ -169,6 +198,7 @@ const Tenants: React.FC = () => {
 
       setModalOpen(false);
       setEditing(null);
+      refreshTenantData();
       fetchTenants();
     } catch (err) {
       const status = err instanceof ApiError ? err.status : undefined;
@@ -221,9 +251,11 @@ const Tenants: React.FC = () => {
                 <Button type="link" icon={<EditOutlined />} onClick={() => handleEditar(record)}>
                   Editar
                 </Button>
-                <Button type="link" danger icon={<DeleteOutlined />} onClick={() => handleExcluir(record)}>
-                  Excluir
-                </Button>
+                {String(record.Slug || '').toLowerCase() !== 'executive' && (
+                  <Button type="link" danger icon={<DeleteOutlined />} onClick={() => handleExcluir(record)}>
+                    Excluir
+                  </Button>
+                )}
               </Space>
             ),
           },

@@ -79,9 +79,12 @@ const Login: React.FC<LoginProps> = ({ open, onLoggedIn }) => {
       localStorage.setItem('auth_nome', String(json.nome || ''));
       localStorage.setItem('auth_perfil', String(json.perfil || ''));
       localStorage.setItem('auth_tenant_slug', String(json.tenant?.Slug || ''));
+      localStorage.setItem('auth_tenant_id', String(json.tenant?.IdTenant ?? ''));
+      localStorage.setItem('auth_tenant_name', String(json.tenant?.Tenant ?? ''));
       localStorage.setItem('auth_login_at', String(Date.now()));
 
       message.success('Login efetuado');
+      window.dispatchEvent(new Event('executive-auth-changed'));
       onLoggedIn(String(json.token));
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Falha ao autenticar';

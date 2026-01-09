@@ -26,6 +26,8 @@ const authHeaders = () => {
   return headers;
 };
 
+const isExecutiveAuth = () => String(localStorage.getItem('auth_tenant_slug') || '').toLowerCase() === 'executive';
+
 const ExecutivosPage: React.FC = () => {
   const { currentTenant } = useTenant();
   const empresaNome = currentTenant?.id === 0 ? '' : currentTenant?.name || '';
@@ -89,7 +91,12 @@ const ExecutivosPage: React.FC = () => {
       cancelText: 'Cancelar',
       onOk: async () => {
         try {
-          const res = await fetch(`${endpoint()}/${record.IdExecutivo}`, { method: 'DELETE', headers: authHeaders() });
+          const tenantQuery =
+            isExecutiveAuth() && currentTenant?.id && currentTenant.id !== 0 ? `?tenant_id=${currentTenant.id}` : '';
+          const res = await fetch(`${endpoint()}/${record.IdExecutivo}${tenantQuery}`, {
+            method: 'DELETE',
+            headers: authHeaders(),
+          });
           if (!res.ok && res.status !== 204) throw new Error(await res.text());
           message.success('Executivo excluído');
           fetchExecutivos();
@@ -107,12 +114,14 @@ const ExecutivosPage: React.FC = () => {
       Executivo: String(values.Executivo ?? ''),
       Funcao: String(values.Funcao ?? ''),
       Perfil: String(values.Perfil ?? ''),
-      Empresa: String(values.Empresa ?? ''),
+      Empresa: String(values.Empresa ?? empresaNome ?? ''),
     };
 
     try {
+      const tenantQuery =
+        isExecutiveAuth() && currentTenant?.id && currentTenant.id !== 0 ? `?tenant_id=${currentTenant.id}` : '';
       if (editing?.IdExecutivo) {
-        const res = await fetch(`${endpoint()}/${editing.IdExecutivo}`, {
+        const res = await fetch(`${endpoint()}/${editing.IdExecutivo}${tenantQuery}`, {
           method: 'PUT',
           headers: authHeaders(),
           body: JSON.stringify(payload),
@@ -120,7 +129,7 @@ const ExecutivosPage: React.FC = () => {
         if (!res.ok) throw new Error(await res.text());
         message.success('Executivo atualizado');
       } else {
-        const res = await fetch(endpoint(), {
+        const res = await fetch(`${endpoint()}${tenantQuery}`, {
           method: 'POST',
           headers: authHeaders(),
           body: JSON.stringify(payload),

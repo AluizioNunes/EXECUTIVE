@@ -13,8 +13,8 @@ import StakeholdersPage from './pages/Stakeholders';
 import AIAssistantPage from './pages/AIAssistant';
 import AnalyticsPage from './pages/Analytics';
 import Perfil from './pages/Perfil';
-import PF from './pages/PF';
-import PJ from './pages/PJ';
+import PessoaFisicaPage from './pages/PessoaFisica';
+import PessoaJuridicaPage from './pages/PessoaJuridica';
 import UsuarioPage from './pages/Usuario';
 import PermissoesPage from './pages/Permissoes';
 import Empresas from './pages/Empresas';
@@ -24,6 +24,9 @@ import ExecutivosPage from './pages/Executivos';
 import Ativos from './pages/Ativos';
 import CentroCustos from './pages/CentroCustos';
 import Tenants from './pages/Tenants';
+import DepartamentosPage from './pages/Departamentos';
+import FuncoesPage from './pages/Funcoes';
+import ColaboradoresPage from './pages/Colaboradores';
 
 // Wrapper components para passar tenant para as páginas
 const TenantAwarePageWrapper: React.FC<{ Component: React.ComponentType }> = ({ Component }) => {
@@ -62,11 +65,16 @@ const router = createBrowserRouter([
       { path: 'ai-assistant', element: <TenantAwarePageWrapper Component={AIAssistantPage} /> },
       { path: 'analytics', element: <TenantAwarePageWrapper Component={AnalyticsPage} /> },
       // Novas rotas de CADASTROS e SISTEMA
-      { path: 'cadastros/pf', element: <TenantAwarePageWrapper Component={PF} /> },
-      { path: 'cadastros/pj', element: <TenantAwarePageWrapper Component={PJ} /> },
-      { path: 'cadastros/funcao', element: <TenantAwarePageWrapper Component={Perfil} /> },
+      { path: 'cadastros/pf', element: <TenantAwarePageWrapper Component={PessoaFisicaPage} /> },
+      { path: 'cadastros/pj', element: <TenantAwarePageWrapper Component={PessoaJuridicaPage} /> },
+      { path: 'cadastros/funcao', element: <TenantAwarePageWrapper Component={FuncoesPage} /> },
       { path: 'cadastros/executivos', element: <TenantAwarePageWrapper Component={ExecutivosPage} /> },
       { path: 'cadastros/ativos', element: <TenantAwarePageWrapper Component={Ativos} /> },
+      { path: 'gestao-interna/empresas', element: <TenantAwarePageWrapper Component={Empresas} /> },
+      { path: 'gestao-interna/colaboradores', element: <TenantAwarePageWrapper Component={ColaboradoresPage} /> },
+      { path: 'gestao-interna/departamentos', element: <TenantAwarePageWrapper Component={DepartamentosPage} /> },
+      { path: 'gestao-interna/funcoes', element: <TenantAwarePageWrapper Component={FuncoesPage} /> },
+      { path: 'gestao-interna/ativos', element: <TenantAwarePageWrapper Component={Ativos} /> },
       { path: 'sistema/usuario', element: <TenantAwarePageWrapper Component={UsuarioPage} /> },
       { path: 'sistema/perfil', element: <TenantAwarePageWrapper Component={Perfil} /> },
       { path: 'sistema/permissoes', element: <TenantAwarePageWrapper Component={PermissoesPage} /> },
@@ -101,11 +109,16 @@ const router = createBrowserRouter([
       { path: 'ai-assistant', element: <TenantAwarePageWrapper Component={AIAssistantPage} /> },
       { path: 'analytics', element: <TenantAwarePageWrapper Component={AnalyticsPage} /> },
       // Novas rotas de CADASTROS e SISTEMA por tenant
-      { path: 'cadastros/pf', element: <TenantAwarePageWrapper Component={PF} /> },
-      { path: 'cadastros/pj', element: <TenantAwarePageWrapper Component={PJ} /> },
-      { path: 'cadastros/funcao', element: <TenantAwarePageWrapper Component={Perfil} /> },
+      { path: 'cadastros/pf', element: <TenantAwarePageWrapper Component={PessoaFisicaPage} /> },
+      { path: 'cadastros/pj', element: <TenantAwarePageWrapper Component={PessoaJuridicaPage} /> },
+      { path: 'cadastros/funcao', element: <TenantAwarePageWrapper Component={FuncoesPage} /> },
       { path: 'cadastros/executivos', element: <TenantAwarePageWrapper Component={ExecutivosPage} /> },
       { path: 'cadastros/ativos', element: <TenantAwarePageWrapper Component={Ativos} /> },
+      { path: 'gestao-interna/empresas', element: <TenantAwarePageWrapper Component={Empresas} /> },
+      { path: 'gestao-interna/colaboradores', element: <TenantAwarePageWrapper Component={ColaboradoresPage} /> },
+      { path: 'gestao-interna/departamentos', element: <TenantAwarePageWrapper Component={DepartamentosPage} /> },
+      { path: 'gestao-interna/funcoes', element: <TenantAwarePageWrapper Component={FuncoesPage} /> },
+      { path: 'gestao-interna/ativos', element: <TenantAwarePageWrapper Component={Ativos} /> },
       { path: 'sistema/usuario', element: <TenantAwarePageWrapper Component={UsuarioPage} /> },
       { path: 'sistema/perfil', element: <TenantAwarePageWrapper Component={Perfil} /> },
       { path: 'sistema/permissoes', element: <TenantAwarePageWrapper Component={PermissoesPage} /> },

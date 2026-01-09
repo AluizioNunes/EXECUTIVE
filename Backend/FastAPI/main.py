@@ -8,17 +8,18 @@ import hashlib
 import urllib.parse
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile, status
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import Column, Date, Integer, MetaData, Numeric, String, create_engine, select, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import Column, Date, Integer, MetaData, Numeric, String, create_engine, delete, func, or_, select, text
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.schema import ForeignKeyConstraint
@@ -80,6 +81,8 @@ class ExecutivoModel(Base):
     Funcao = Column("Funcao", String(255), nullable=False)
     Perfil = Column("Perfil", String(255), nullable=False)
     Empresa = Column("Empresa", String(255), nullable=False)
+    TenantId = Column("TenantId", Integer, nullable=True, index=True)
+    Tenant = Column("Tenant", String(255), nullable=True)
 
 
 class ContasPagarModel(Base):
@@ -110,6 +113,8 @@ class ContasPagarModel(Base):
     Usuario = Column("Usuario", String(255), nullable=True)
     Senha = Column("Senha", String(255), nullable=True)
     Empresa = Column("Empresa", String(255), nullable=True)
+    TenantId = Column("TenantId", Integer, nullable=True, index=True)
+    Tenant = Column("Tenant", String(255), nullable=True)
 
 
 class AtivoModel(Base):
@@ -127,6 +132,8 @@ class AtivoModel(Base):
     Responsavel = Column("Responsavel", String(255), nullable=True)
     Atribuido = Column("Atribuido", String(255), nullable=True)
     Empresa = Column("Empresa", String(255), nullable=True)
+    TenantId = Column("TenantId", Integer, nullable=True, index=True)
+    Tenant = Column("Tenant", String(255), nullable=True)
 
 
 class CentroCustosModel(Base):
@@ -142,6 +149,49 @@ class CentroCustosModel(Base):
     Empresa = Column("Empresa", String(255), nullable=False)
     Departamento = Column("Departamento", String(255), nullable=True)
     Responsavel = Column("Responsavel", String(255), nullable=True)
+    TenantId = Column("TenantId", Integer, nullable=True, index=True)
+    Tenant = Column("Tenant", String(255), nullable=True)
+
+
+class DepartamentoModel(Base):
+    __tablename__ = "Departamentos"
+    __table_args__ = SCHEMA_TABLE_ARGS
+
+    IdDepartamento = Column("IdDepartamento", Integer, primary_key=True, autoincrement=True, index=True)
+    Departamento = Column("Departamento", String(255), nullable=False)
+    Descricao = Column("Descricao", String(1000), nullable=True)
+    IdTenant = Column("IdTenant", Integer, nullable=True, index=True)
+    Tenant = Column("Tenant", String(255), nullable=True)
+    DataCadastro = Column("DataCadastro", Date, nullable=True, default=date.today)
+    Cadastrante = Column("Cadastrante", String(255), nullable=True)
+
+
+class FuncaoModel(Base):
+    __tablename__ = "Funcoes"
+    __table_args__ = SCHEMA_TABLE_ARGS
+
+    IdFuncao = Column("IdFuncao", Integer, primary_key=True, autoincrement=True, index=True)
+    Funcao = Column("Funcao", String(255), nullable=False)
+    Descricao = Column("Descricao", String(1000), nullable=True)
+    Departamento = Column("Departamento", String(255), nullable=False)
+    IdTenant = Column("IdTenant", Integer, nullable=True, index=True)
+    Tenant = Column("Tenant", String(255), nullable=True)
+    DataCadastro = Column("DataCadastro", Date, nullable=True, default=date.today)
+    Cadastrante = Column("Cadastrante", String(255), nullable=True)
+
+
+class ColaboradorModel(Base):
+    __tablename__ = "Colaboradores"
+    __table_args__ = SCHEMA_TABLE_ARGS
+
+    IdColaborador = Column("IdColaborador", Integer, primary_key=True, autoincrement=True, index=True)
+    Colaborador = Column("Colaborador", String(255), nullable=False)
+    Descricao = Column("Descricao", String(1000), nullable=True)
+    Funcao = Column("Funcao", String(255), nullable=False)
+    IdTenant = Column("IdTenant", Integer, nullable=True, index=True)
+    Tenant = Column("Tenant", String(255), nullable=True)
+    DataCadastro = Column("DataCadastro", Date, nullable=True, default=date.today)
+    Cadastrante = Column("Cadastrante", String(255), nullable=True)
 
 
 class TenantsModel(Base):
@@ -304,7 +354,7 @@ def _ensure_default_admin_user() -> None:
             tenant_id = int(tenant.IdTenant) if tenant else 1
             existing_en = db.execute(select(UsuariosModel).where(UsuariosModel.Usuario == "ADMINISTRATOR")).scalar_one_or_none()
             if existing_en:
-                db.delete(existing_en)
+                existing_en.Ativo = 0
                 db.commit()
 
             existing = db.execute(select(UsuariosModel).where(UsuariosModel.Usuario == "ADMINISTRADOR")).scalar_one_or_none()
@@ -353,6 +403,110 @@ def _ensure_ativos_empresa_column() -> None:
         return
 
 
+def _ensure_executivos_tenant_columns_executive_db() -> None:
+    if not DATABASE_URL.startswith("postgresql"):
+        return
+    try:
+        with engine.connect() as conn:
+            cols_rows = conn.execute(
+                text("select column_name from information_schema.columns where table_schema=:s and table_name=:t"),
+                {"s": SCHEMA_NAME, "t": "Executivos"},
+            ).fetchall()
+            existing = {str(r[0]) for r in cols_rows}
+
+            statements: list[str] = []
+            if "TenantId" not in existing:
+                statements.append(f'ALTER TABLE "{SCHEMA_NAME}"."Executivos" ADD COLUMN "TenantId" INTEGER')
+            if "Tenant" not in existing:
+                statements.append(f'ALTER TABLE "{SCHEMA_NAME}"."Executivos" ADD COLUMN "Tenant" VARCHAR(255)')
+            for stmt in statements:
+                conn.exec_driver_sql(stmt)
+            if statements:
+                conn.commit()
+
+            conn.execute(
+                text(
+                    f"""
+                    update "{SCHEMA_NAME}"."Executivos" e
+                    set "TenantId" = t."IdTenant",
+                        "Tenant" = t."Tenant"
+                    from "{SCHEMA_NAME}"."Tenants" t
+                    where lower(e."Empresa") = lower(t."Tenant")
+                      and (
+                        e."TenantId" is null
+                        or e."TenantId" = 0
+                        or e."Tenant" is null
+                        or btrim(e."Tenant") = ''
+                      )
+                    """
+                )
+            )
+            conn.commit()
+
+            conn.exec_driver_sql(f'CREATE INDEX IF NOT EXISTS "ix_Executivos_TenantId" ON "{SCHEMA_NAME}"."Executivos" ("TenantId")')
+            conn.commit()
+    except Exception:
+        return
+
+
+def _ensure_executivos_tenant_columns_tenant_db(*, db_name: str, tenant_id: int, tenant_name: str) -> None:
+    if not DATABASE_URL.startswith("postgresql"):
+        return
+    try:
+        tenant_engine = _tenant_engine(db_name=_sanitize_db_name(db_name))
+        with tenant_engine.connect() as conn:
+            cols_rows = conn.execute(
+                text("select column_name from information_schema.columns where table_schema=:s and table_name=:t"),
+                {"s": SCHEMA_NAME, "t": "Executivos"},
+            ).fetchall()
+            existing = {str(r[0]) for r in cols_rows}
+
+            statements: list[str] = []
+            if "TenantId" not in existing:
+                statements.append(f'ALTER TABLE "{SCHEMA_NAME}"."Executivos" ADD COLUMN "TenantId" INTEGER')
+            if "Tenant" not in existing:
+                statements.append(f'ALTER TABLE "{SCHEMA_NAME}"."Executivos" ADD COLUMN "Tenant" VARCHAR(255)')
+            for stmt in statements:
+                conn.exec_driver_sql(stmt)
+            if statements:
+                conn.commit()
+
+            conn.execute(
+                text(
+                    f"""
+                    update "{SCHEMA_NAME}"."Executivos"
+                    set "TenantId" = :tenant_id,
+                        "Tenant" = :tenant_name
+                    where "TenantId" is null
+                       or "TenantId" = 0
+                       or "Tenant" is null
+                       or btrim("Tenant") = ''
+                    """
+                ),
+                {"tenant_id": int(tenant_id), "tenant_name": str(tenant_name or "").strip()},
+            )
+            conn.commit()
+
+            conn.exec_driver_sql(f'CREATE INDEX IF NOT EXISTS "ix_Executivos_TenantId" ON "{SCHEMA_NAME}"."Executivos" ("TenantId")')
+            conn.commit()
+    except Exception:
+        return
+
+
+def _ensure_executivos_tenant_columns_all_databases() -> None:
+    try:
+        _ensure_executivos_tenant_columns_executive_db()
+        with SessionLocal() as db:
+            tenants = db.execute(select(TenantsModel).order_by(TenantsModel.IdTenant.asc())).scalars().all()
+        for t in tenants:
+            if str(t.Slug or "").strip().lower() == "executive":
+                continue
+            db_name = _tenant_db_name(tenant_id=int(t.IdTenant), slug=str(t.Slug))
+            _ensure_executivos_tenant_columns_tenant_db(db_name=db_name, tenant_id=int(t.IdTenant), tenant_name=str(t.Tenant or "").strip())
+    except Exception:
+        return
+
+
 def _ensure_usuarios_columns() -> None:
     if not DATABASE_URL.startswith("postgresql"):
         return
@@ -394,6 +548,222 @@ def _ensure_usuarios_columns() -> None:
                 conn.exec_driver_sql(stmt)
             if statements:
                 conn.commit()
+    except Exception:
+        return
+
+
+def _ensure_table_tenant_columns_executive_db(*, table: str, tenant_name_column: str = "Empresa") -> None:
+    if not DATABASE_URL.startswith("postgresql"):
+        return
+    try:
+        with engine.connect() as conn:
+            cols_rows = conn.execute(
+                text("select column_name from information_schema.columns where table_schema=:s and table_name=:t"),
+                {"s": SCHEMA_NAME, "t": table},
+            ).fetchall()
+            existing = {str(r[0]) for r in cols_rows}
+
+            statements: list[str] = []
+            if "TenantId" not in existing:
+                statements.append(f'ALTER TABLE "{SCHEMA_NAME}"."{table}" ADD COLUMN "TenantId" INTEGER')
+            if "Tenant" not in existing:
+                statements.append(f'ALTER TABLE "{SCHEMA_NAME}"."{table}" ADD COLUMN "Tenant" VARCHAR(255)')
+            for stmt in statements:
+                conn.exec_driver_sql(stmt)
+            if statements:
+                conn.commit()
+
+            conn.execute(
+                text(
+                    f"""
+                    update "{SCHEMA_NAME}"."{table}" r
+                    set "TenantId" = t."IdTenant",
+                        "Tenant" = t."Tenant"
+                    from "{SCHEMA_NAME}"."Tenants" t
+                    where lower(r."{tenant_name_column}") = lower(t."Tenant")
+                      and (
+                        r."TenantId" is null
+                        or r."TenantId" = 0
+                        or r."Tenant" is null
+                        or btrim(r."Tenant") = ''
+                      )
+                    """
+                )
+            )
+            conn.commit()
+
+            conn.exec_driver_sql(f'CREATE INDEX IF NOT EXISTS "ix_{table}_TenantId" ON "{SCHEMA_NAME}"."{table}" ("TenantId")')
+            conn.commit()
+    except Exception:
+        return
+
+
+def _ensure_table_tenant_columns_tenant_db(*, db_name: str, table: str, tenant_id: int, tenant_name: str) -> None:
+    if not DATABASE_URL.startswith("postgresql"):
+        return
+    try:
+        tenant_engine = _tenant_engine(db_name=_sanitize_db_name(db_name))
+        with tenant_engine.connect() as conn:
+            cols_rows = conn.execute(
+                text("select column_name from information_schema.columns where table_schema=:s and table_name=:t"),
+                {"s": SCHEMA_NAME, "t": table},
+            ).fetchall()
+            existing = {str(r[0]) for r in cols_rows}
+
+            statements: list[str] = []
+            if "TenantId" not in existing:
+                statements.append(f'ALTER TABLE "{SCHEMA_NAME}"."{table}" ADD COLUMN "TenantId" INTEGER')
+            if "Tenant" not in existing:
+                statements.append(f'ALTER TABLE "{SCHEMA_NAME}"."{table}" ADD COLUMN "Tenant" VARCHAR(255)')
+            for stmt in statements:
+                conn.exec_driver_sql(stmt)
+            if statements:
+                conn.commit()
+
+            conn.execute(
+                text(
+                    f"""
+                    update "{SCHEMA_NAME}"."{table}"
+                    set "TenantId" = :tenant_id,
+                        "Tenant" = :tenant_name
+                    where "TenantId" is null
+                       or "TenantId" = 0
+                       or "Tenant" is null
+                       or btrim("Tenant") = ''
+                    """
+                ),
+                {"tenant_id": int(tenant_id), "tenant_name": str(tenant_name or "").strip()},
+            )
+            conn.commit()
+
+            conn.exec_driver_sql(f'CREATE INDEX IF NOT EXISTS "ix_{table}_TenantId" ON "{SCHEMA_NAME}"."{table}" ("TenantId")')
+            conn.commit()
+    except Exception:
+        return
+
+
+def _ensure_gestao_interna_tables_in_engine(*, engine_to_use: Engine) -> None:
+    if not DATABASE_URL.startswith("postgresql"):
+        return
+    try:
+        with engine_to_use.connect() as conn:
+            conn.exec_driver_sql(f'CREATE SCHEMA IF NOT EXISTS "{SCHEMA_NAME}"')
+
+            conn.exec_driver_sql(
+                f"""
+                CREATE TABLE IF NOT EXISTS "{SCHEMA_NAME}"."Departamentos" (
+                    "IdDepartamento" INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                    "Departamento" VARCHAR(255) NOT NULL,
+                    "Descricao" VARCHAR(1000) NULL,
+                    "IdTenant" INTEGER NULL,
+                    "Tenant" VARCHAR(255) NULL,
+                    "DataCadastro" DATE NULL,
+                    "Cadastrante" VARCHAR(255) NULL
+                )
+                """
+            )
+            conn.exec_driver_sql(
+                f"""
+                CREATE TABLE IF NOT EXISTS "{SCHEMA_NAME}"."Funcoes" (
+                    "IdFuncao" INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                    "Funcao" VARCHAR(255) NOT NULL,
+                    "Descricao" VARCHAR(1000) NULL,
+                    "Departamento" VARCHAR(255) NOT NULL,
+                    "IdTenant" INTEGER NULL,
+                    "Tenant" VARCHAR(255) NULL,
+                    "DataCadastro" DATE NULL,
+                    "Cadastrante" VARCHAR(255) NULL
+                )
+                """
+            )
+            conn.exec_driver_sql(
+                f"""
+                CREATE TABLE IF NOT EXISTS "{SCHEMA_NAME}"."Colaboradores" (
+                    "IdColaborador" INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                    "Colaborador" VARCHAR(255) NOT NULL,
+                    "Descricao" VARCHAR(1000) NULL,
+                    "Funcao" VARCHAR(255) NOT NULL,
+                    "IdTenant" INTEGER NULL,
+                    "Tenant" VARCHAR(255) NULL,
+                    "DataCadastro" DATE NULL,
+                    "Cadastrante" VARCHAR(255) NULL
+                )
+                """
+            )
+
+            conn.exec_driver_sql(f'CREATE INDEX IF NOT EXISTS "ix_Departamentos_IdTenant" ON "{SCHEMA_NAME}"."Departamentos" ("IdTenant")')
+            conn.exec_driver_sql(f'CREATE INDEX IF NOT EXISTS "ix_Funcoes_IdTenant" ON "{SCHEMA_NAME}"."Funcoes" ("IdTenant")')
+            conn.exec_driver_sql(f'CREATE INDEX IF NOT EXISTS "ix_Colaboradores_IdTenant" ON "{SCHEMA_NAME}"."Colaboradores" ("IdTenant")')
+            conn.commit()
+    except Exception:
+        return
+
+
+def _ensure_gestao_interna_tables_for_auth(*, tenant_id: int, tenant_slug: str) -> None:
+    safe_slug = str(tenant_slug or "").strip().lower()
+    if tenant_id <= 0 or not safe_slug:
+        return
+    db_name = _tenant_db_name_for_auth(tenant_id=int(tenant_id), tenant_slug=safe_slug)
+    if safe_slug == "executive":
+        _ensure_gestao_interna_tables_in_engine(engine_to_use=engine)
+        return
+    tenant_engine = _tenant_engine(db_name=_sanitize_db_name(db_name))
+    _ensure_gestao_interna_tables_in_engine(engine_to_use=tenant_engine)
+
+
+def _ensure_gestao_interna_tables_all_databases() -> None:
+    try:
+        _ensure_gestao_interna_tables_in_engine(engine_to_use=engine)
+        with SessionLocal() as db:
+            tenants = db.execute(select(TenantsModel).order_by(TenantsModel.IdTenant.asc())).scalars().all()
+        for t in tenants:
+            if str(t.Slug or "").strip().lower() == "executive":
+                continue
+            tenant_engine = _tenant_engine(db_name=_sanitize_db_name(_tenant_db_name(tenant_id=int(t.IdTenant), slug=str(t.Slug))))
+            _ensure_gestao_interna_tables_in_engine(engine_to_use=tenant_engine)
+    except Exception:
+        return
+
+
+def _gestao_interna_tables_exist_in_engine(*, engine_to_use: Engine) -> bool:
+    if not DATABASE_URL.startswith("postgresql"):
+        return False
+    try:
+        with engine_to_use.connect() as conn:
+            rows = conn.execute(
+                text(
+                    """
+                    select table_name
+                    from information_schema.tables
+                    where table_schema = :s
+                      and table_name in ('Departamentos', 'Funcoes', 'Colaboradores')
+                    """
+                ),
+                {"s": SCHEMA_NAME},
+            ).fetchall()
+            existing = {str(r[0]) for r in rows}
+            return {"Departamentos", "Funcoes", "Colaboradores"}.issubset(existing)
+    except Exception:
+        return False
+
+
+def _ensure_tenant_columns_all_databases() -> None:
+    try:
+        _ensure_table_tenant_columns_executive_db(table="Ativos", tenant_name_column="Empresa")
+        _ensure_table_tenant_columns_executive_db(table="ContasPagar", tenant_name_column="Empresa")
+        _ensure_table_tenant_columns_executive_db(table="CentroCustos", tenant_name_column="Empresa")
+
+        with SessionLocal() as db:
+            tenants = db.execute(select(TenantsModel).order_by(TenantsModel.IdTenant.asc())).scalars().all()
+
+        for t in tenants:
+            if str(t.Slug or "").strip().lower() == "executive":
+                continue
+            db_name = _tenant_db_name(tenant_id=int(t.IdTenant), slug=str(t.Slug))
+            tenant_name = str(t.Tenant or "").strip()
+            _ensure_table_tenant_columns_tenant_db(db_name=db_name, table="Ativos", tenant_id=int(t.IdTenant), tenant_name=tenant_name)
+            _ensure_table_tenant_columns_tenant_db(db_name=db_name, table="ContasPagar", tenant_id=int(t.IdTenant), tenant_name=tenant_name)
+            _ensure_table_tenant_columns_tenant_db(db_name=db_name, table="CentroCustos", tenant_id=int(t.IdTenant), tenant_name=tenant_name)
     except Exception:
         return
 
@@ -461,8 +831,11 @@ def _ensure_usuarios_nome_column_position() -> None:
 _ensure_ativos_empresa_column()
 _ensure_usuarios_columns()
 _ensure_usuarios_nome_column_position()
+_ensure_gestao_interna_tables_all_databases()
 _ensure_default_tenant_executive()
 _ensure_default_admin_user()
+_ensure_executivos_tenant_columns_all_databases()
+_ensure_tenant_columns_all_databases()
 
 
 def get_db() -> Session:
@@ -472,6 +845,60 @@ def get_db() -> Session:
     finally:
         db.close()
 
+
+_DEFAULT_DATABASE_NAME = str(make_url(DATABASE_URL).database or "").strip() or "postgres"
+_TENANT_SESSIONMAKERS: dict[str, sessionmaker] = {}
+_TENANT_DB_TENANT_COLUMNS_ENSURED: set[str] = set()
+
+
+def _tenant_db_name_for_auth(*, tenant_id: int, tenant_slug: str) -> str:
+    if str(tenant_slug or "").strip().lower() == "executive":
+        return _DEFAULT_DATABASE_NAME
+    return _tenant_db_name(tenant_id=int(tenant_id), slug=str(tenant_slug))
+
+
+def _tenant_sessionmaker(db_name: str) -> sessionmaker:
+    safe_db = _sanitize_db_name(db_name)
+    existing = _TENANT_SESSIONMAKERS.get(safe_db)
+    if existing is not None:
+        return existing
+    tenant_engine = _tenant_engine(db_name=safe_db)
+    TenantSession = sessionmaker(bind=tenant_engine, autoflush=False, autocommit=False)
+    _TENANT_SESSIONMAKERS[safe_db] = TenantSession
+    return TenantSession
+
+
+def _ensure_tenant_columns_for_auth(*, tenant_id: int, tenant_slug: str) -> None:
+    safe_slug = str(tenant_slug or "").strip().lower()
+    if tenant_id <= 0 or not safe_slug:
+        return
+
+    db_name = _tenant_db_name_for_auth(tenant_id=int(tenant_id), tenant_slug=safe_slug)
+    safe_db = _sanitize_db_name(db_name)
+
+    if safe_db in _TENANT_DB_TENANT_COLUMNS_ENSURED:
+        return
+
+    if not DATABASE_URL.startswith("postgresql"):
+        _TENANT_DB_TENANT_COLUMNS_ENSURED.add(safe_db)
+        return
+
+    if safe_slug == "executive":
+        _ensure_executivos_tenant_columns_executive_db()
+        _ensure_table_tenant_columns_executive_db(table="Ativos", tenant_name_column="Empresa")
+        _ensure_table_tenant_columns_executive_db(table="ContasPagar", tenant_name_column="Empresa")
+        _ensure_table_tenant_columns_executive_db(table="CentroCustos", tenant_name_column="Empresa")
+        _ensure_gestao_interna_tables_for_auth(tenant_id=int(tenant_id), tenant_slug=safe_slug)
+        _TENANT_DB_TENANT_COLUMNS_ENSURED.add(safe_db)
+        return
+
+    tenant_name = _tenant_name_from_id(int(tenant_id)) or safe_slug
+    _ensure_executivos_tenant_columns_tenant_db(db_name=safe_db, tenant_id=int(tenant_id), tenant_name=str(tenant_name))
+    _ensure_table_tenant_columns_tenant_db(db_name=safe_db, table="Ativos", tenant_id=int(tenant_id), tenant_name=str(tenant_name))
+    _ensure_table_tenant_columns_tenant_db(db_name=safe_db, table="ContasPagar", tenant_id=int(tenant_id), tenant_name=str(tenant_name))
+    _ensure_table_tenant_columns_tenant_db(db_name=safe_db, table="CentroCustos", tenant_id=int(tenant_id), tenant_name=str(tenant_name))
+    _ensure_gestao_interna_tables_for_auth(tenant_id=int(tenant_id), tenant_slug=safe_slug)
+    _TENANT_DB_TENANT_COLUMNS_ENSURED.add(safe_db)
 
 class ExecutivoCreate(BaseModel):
     Executivo: str = Field(min_length=1, max_length=255)
@@ -493,6 +920,8 @@ class ExecutivoOut(BaseModel):
     Funcao: str
     Perfil: str
     Empresa: str
+    TenantId: Optional[int] = None
+    Tenant: Optional[str] = None
 
 
 class ContasPagarCreate(BaseModel):
@@ -569,6 +998,8 @@ class ContasPagarOut(BaseModel):
     Usuario: Optional[str] = None
     Senha: Optional[str] = None
     Empresa: Optional[str] = None
+    TenantId: Optional[int] = None
+    Tenant: Optional[str] = None
 
 
 class AtivoCreate(BaseModel):
@@ -609,6 +1040,8 @@ class AtivoOut(BaseModel):
     Responsavel: Optional[str] = None
     Atribuido: Optional[str] = None
     Empresa: Optional[str] = None
+    TenantId: Optional[int] = None
+    Tenant: Optional[str] = None
 
 
 class CentroCustosCreate(BaseModel):
@@ -643,6 +1076,74 @@ class CentroCustosOut(BaseModel):
     Empresa: str
     Departamento: Optional[str] = None
     Responsavel: Optional[str] = None
+    TenantId: Optional[int] = None
+    Tenant: Optional[str] = None
+
+
+class DepartamentoCreate(BaseModel):
+    Departamento: str = Field(min_length=1, max_length=255)
+    Descricao: Optional[str] = Field(default=None, max_length=1000)
+
+
+class DepartamentoUpdate(BaseModel):
+    Departamento: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    Descricao: Optional[str] = Field(default=None, max_length=1000)
+
+
+class DepartamentoOut(BaseModel):
+    IdDepartamento: int
+    Departamento: str
+    Descricao: Optional[str] = None
+    IdTenant: Optional[int] = None
+    Tenant: Optional[str] = None
+    DataCadastro: Optional[date] = None
+    Cadastrante: Optional[str] = None
+
+
+class FuncaoCreate(BaseModel):
+    Funcao: str = Field(min_length=1, max_length=255)
+    Descricao: Optional[str] = Field(default=None, max_length=1000)
+    Departamento: str = Field(min_length=1, max_length=255)
+
+
+class FuncaoUpdate(BaseModel):
+    Funcao: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    Descricao: Optional[str] = Field(default=None, max_length=1000)
+    Departamento: Optional[str] = Field(default=None, min_length=1, max_length=255)
+
+
+class FuncaoOut(BaseModel):
+    IdFuncao: int
+    Funcao: str
+    Descricao: Optional[str] = None
+    Departamento: str
+    IdTenant: Optional[int] = None
+    Tenant: Optional[str] = None
+    DataCadastro: Optional[date] = None
+    Cadastrante: Optional[str] = None
+
+
+class ColaboradorCreate(BaseModel):
+    Colaborador: str = Field(min_length=1, max_length=255)
+    Descricao: Optional[str] = Field(default=None, max_length=1000)
+    Funcao: str = Field(min_length=1, max_length=255)
+
+
+class ColaboradorUpdate(BaseModel):
+    Colaborador: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    Descricao: Optional[str] = Field(default=None, max_length=1000)
+    Funcao: Optional[str] = Field(default=None, min_length=1, max_length=255)
+
+
+class ColaboradorOut(BaseModel):
+    IdColaborador: int
+    Colaborador: str
+    Descricao: Optional[str] = None
+    Funcao: str
+    IdTenant: Optional[int] = None
+    Tenant: Optional[str] = None
+    DataCadastro: Optional[date] = None
+    Cadastrante: Optional[str] = None
 
 
 class TenantCreate(BaseModel):
@@ -813,18 +1314,110 @@ def _require_superadmin(auth: Optional[dict[str, Any]] = Depends(_get_auth)) -> 
     return auth or {}
 
 
+def get_tenant_db(auth: dict[str, Any] = Depends(_require_auth)) -> Session:
+    tenant_id = int(auth.get("tenant_id") or 0)
+    tenant_slug = str(auth.get("tenant_slug") or "").strip().lower()
+    if tenant_id <= 0 or not tenant_slug:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Não autorizado")
+
+    try:
+        _ensure_tenant_columns_for_auth(tenant_id=tenant_id, tenant_slug=tenant_slug)
+    except HTTPException:
+        raise
+    except Exception as e:
+        msg = str(getattr(e, "orig", None) or e or "").strip()
+        msg = re.sub(r"\s+", " ", msg).strip()
+        if not msg:
+            msg = str(e.__class__.__name__)
+        if len(msg) > 240:
+            msg = msg[:240].rstrip() + "..."
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Falha ao preparar banco do tenant: {msg}")
+
+    db_name = _tenant_db_name_for_auth(tenant_id=tenant_id, tenant_slug=tenant_slug)
+    TenantSession = _tenant_sessionmaker(db_name)
+    db = TenantSession()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+def _tenant_name_from_id(tenant_id: int) -> Optional[str]:
+    try:
+        with SessionLocal() as db:
+            row = db.get(TenantsModel, int(tenant_id))
+            if not row:
+                return None
+            name = str(row.Tenant or "").strip()
+            return name if name else None
+    except Exception:
+        return None
+
+
+def _tenant_meta_from_id(tenant_id: int) -> Optional[tuple[int, str, str]]:
+    try:
+        with SessionLocal() as db:
+            row = db.get(TenantsModel, int(tenant_id))
+            if not row:
+                return None
+            tid = int(row.IdTenant)
+            slug = str(row.Slug or "").strip().lower()
+            name = str(row.Tenant or "").strip()
+            if not slug:
+                return None
+            return (tid, slug, name)
+    except Exception:
+        return None
+
+
+@contextmanager
+def _target_tenant_session(
+    *,
+    db: Session,
+    auth: dict[str, Any],
+    tenant_id: Optional[int],
+) -> Session:
+    if tenant_id is None or not (_is_superadmin(auth) or _is_executive_tenant(auth)):
+        yield db
+        return
+
+    tid = int(tenant_id or 0)
+    if tid <= 0:
+        yield db
+        return
+
+    meta = _tenant_meta_from_id(tid)
+    if not meta:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant não encontrado")
+    target_id, target_slug, _target_name = meta
+    if target_slug == "executive":
+        yield db
+        return
+
+    _ensure_tenant_columns_for_auth(tenant_id=target_id, tenant_slug=target_slug)
+    db_name = _tenant_db_name(tenant_id=target_id, slug=target_slug)
+    TenantSession = _tenant_sessionmaker(db_name)
+    with TenantSession() as tdb:
+        yield tdb
+
+
 app = FastAPI(title="Executive API", version="0.1.0")
 
 def _cors_origins() -> list[str]:
+    defaults = {
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+    }
     raw = os.getenv("CORS_ORIGINS")
-    if raw is None or not str(raw).strip() or str(raw).strip() == "*":
-        return [
-            "http://localhost:5173",
-            "http://127.0.0.1:5173",
-            "http://localhost:5174",
-            "http://127.0.0.1:5174",
-        ]
-    return [o.strip() for o in str(raw).split(",") if o.strip()]
+    if raw is None or not str(raw).strip():
+        return sorted(defaults)
+    if str(raw).strip() == "*":
+        return ["*"]
+    origins = set(defaults)
+    origins.update({o.strip() for o in str(raw).split(",") if o.strip()})
+    return sorted(origins)
 
 
 app.add_middleware(
@@ -836,6 +1429,58 @@ app.add_middleware(
     allow_headers=["*"],
     max_age=0,
 )
+
+
+@app.on_event("startup")
+def _startup_ensure_gestao_interna_tables() -> None:
+    if not DATABASE_URL.startswith("postgresql"):
+        return
+
+    max_wait = int(os.getenv("STARTUP_DB_WAIT_SECONDS") or "60")
+    deadline = time.time() + max(0, max_wait)
+    backoff = 1.0
+
+    while True:
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("select 1"))
+        except OperationalError:
+            if time.time() >= deadline:
+                return
+            time.sleep(backoff)
+            backoff = min(backoff * 1.5, 5.0)
+            continue
+        except Exception:
+            if time.time() >= deadline:
+                return
+            time.sleep(backoff)
+            backoff = min(backoff * 1.5, 5.0)
+            continue
+
+        _ensure_gestao_interna_tables_all_databases()
+
+        ok_exec = _gestao_interna_tables_exist_in_engine(engine_to_use=engine)
+        ok_tenants = True
+        try:
+            with SessionLocal() as db:
+                tenants = db.execute(select(TenantsModel).order_by(TenantsModel.IdTenant.asc())).scalars().all()
+            for t in tenants:
+                slug = str(t.Slug or "").strip().lower()
+                if slug == "executive":
+                    continue
+                db_name = _tenant_db_name(tenant_id=int(t.IdTenant), slug=slug)
+                tenant_engine = _tenant_engine(db_name=_sanitize_db_name(db_name))
+                if not _gestao_interna_tables_exist_in_engine(engine_to_use=tenant_engine):
+                    ok_tenants = False
+        except Exception:
+            ok_tenants = False
+
+        if ok_exec and ok_tenants:
+            return
+        if time.time() >= deadline:
+            return
+        time.sleep(backoff)
+        backoff = min(backoff * 1.5, 5.0)
 
 
 @app.get("/health")
@@ -1100,14 +1745,52 @@ def login(payload: LoginIn, db: Session = Depends(get_db)) -> LoginOut:
 
 @app.get("/api/executivos", response_model=list[ExecutivoOut])
 def list_executivos(
-    empresa: Optional[str] = None, db: Session = Depends(get_db), auth: Optional[dict[str, Any]] = Depends(_get_auth)
+    empresa: Optional[str] = None,
+    db: Session = Depends(get_tenant_db),
+    auth: dict[str, Any] = Depends(_require_auth),
 ) -> list[ExecutivoOut]:
-    if not empresa and not (_is_superadmin(auth) or _is_executive_tenant(auth)):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Não autorizado")
-    stmt = select(ExecutivoModel)
-    if empresa:
-        stmt = stmt.where(ExecutivoModel.Empresa == empresa)
-    rows = db.execute(stmt.order_by(ExecutivoModel.IdExecutivo.asc())).scalars().all()
+    empresa_in = empresa.strip() if isinstance(empresa, str) and empresa.strip() else None
+    if _is_executive_tenant(auth) and empresa_in and empresa_in.strip().lower() == "executive":
+        empresa_in = None
+
+    if _is_superadmin(auth) or _is_executive_tenant(auth):
+        stmt_tenants = select(TenantsModel)
+        if empresa_in:
+            stmt_tenants = stmt_tenants.where(or_(TenantsModel.Tenant == empresa_in, TenantsModel.Slug == empresa_in.lower()))
+        tenants = db.execute(stmt_tenants.order_by(TenantsModel.IdTenant.asc())).scalars().all()
+
+        out: list[ExecutivoOut] = []
+        for t in tenants:
+            _ensure_tenant_columns_for_auth(tenant_id=int(t.IdTenant), tenant_slug=str(t.Slug or ""))
+            if str(t.Slug or "").lower() == "executive":
+                stmt = select(ExecutivoModel).where(ExecutivoModel.Empresa == str(t.Tenant)).order_by(ExecutivoModel.IdExecutivo.asc())
+                rows = db.execute(stmt).scalars().all()
+            else:
+                db_name = _tenant_db_name(tenant_id=int(t.IdTenant), slug=str(t.Slug))
+                TenantSession = _tenant_sessionmaker(db_name)
+                with TenantSession() as tdb:
+                    stmt = select(ExecutivoModel).order_by(ExecutivoModel.IdExecutivo.asc())
+                    rows = tdb.execute(stmt).scalars().all()
+            out.extend(
+                [
+                    ExecutivoOut(
+                        IdExecutivo=r.IdExecutivo,
+                        Executivo=r.Executivo,
+                        Funcao=r.Funcao,
+                        Perfil=r.Perfil,
+                        Empresa=r.Empresa,
+                        TenantId=getattr(r, "TenantId", None),
+                        Tenant=getattr(r, "Tenant", None),
+                    )
+                    for r in rows
+                ]
+            )
+
+        out.sort(key=lambda r: (str(r.Empresa or ""), int(r.IdExecutivo or 0)))
+        return out
+
+    stmt = select(ExecutivoModel).order_by(ExecutivoModel.IdExecutivo.asc())
+    rows = db.execute(stmt).scalars().all()
     return [
         ExecutivoOut(
             IdExecutivo=r.IdExecutivo,
@@ -1115,13 +1798,19 @@ def list_executivos(
             Funcao=r.Funcao,
             Perfil=r.Perfil,
             Empresa=r.Empresa,
+            TenantId=getattr(r, "TenantId", None),
+            Tenant=getattr(r, "Tenant", None),
         )
         for r in rows
     ]
 
 
 @app.get("/api/executivos/{id_executivo}", response_model=ExecutivoOut)
-def get_executivo(id_executivo: int, db: Session = Depends(get_db)) -> ExecutivoOut:
+def get_executivo(
+    id_executivo: int,
+    db: Session = Depends(get_tenant_db),
+    auth: dict[str, Any] = Depends(_require_auth),
+) -> ExecutivoOut:
     row = db.get(ExecutivoModel, id_executivo)
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Executivo não encontrado")
@@ -1131,67 +1820,109 @@ def get_executivo(id_executivo: int, db: Session = Depends(get_db)) -> Executivo
         Funcao=row.Funcao,
         Perfil=row.Perfil,
         Empresa=row.Empresa,
+        TenantId=getattr(row, "TenantId", None),
+        Tenant=getattr(row, "Tenant", None),
     )
 
 
 @app.post("/api/executivos", response_model=ExecutivoOut, status_code=status.HTTP_201_CREATED)
-def create_executivo(payload: ExecutivoCreate, db: Session = Depends(get_db)) -> ExecutivoOut:
-    row = ExecutivoModel(
-        Executivo=payload.Executivo.strip(),
-        Funcao=payload.Funcao.strip(),
-        Perfil=payload.Perfil.strip(),
-        Empresa=payload.Empresa.strip(),
-    )
-    db.add(row)
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Falha ao criar executivo")
-    db.refresh(row)
+def create_executivo(
+    payload: ExecutivoCreate,
+    tenant_id: Optional[int] = Query(None, alias="tenant_id"),
+    db: Session = Depends(get_tenant_db),
+    auth: dict[str, Any] = Depends(_require_auth),
+) -> ExecutivoOut:
+    auth_tenant_id = int(auth.get("tenant_id") or 0)
+    target_tenant_id = int(tenant_id) if (tenant_id is not None and (_is_superadmin(auth) or _is_executive_tenant(auth))) else auth_tenant_id
+    target_meta = _tenant_meta_from_id(target_tenant_id) if target_tenant_id > 0 else None
+    tenant_name = (target_meta[2] if target_meta else None) or _tenant_name_from_id(auth_tenant_id) or str(auth.get("tenant_slug") or "").strip() or None
+
+    with _target_tenant_session(db=db, auth=auth, tenant_id=tenant_id) as tdb:
+        row = ExecutivoModel(
+            Executivo=payload.Executivo.strip(),
+            Funcao=payload.Funcao.strip(),
+            Perfil=payload.Perfil.strip(),
+            Empresa=payload.Empresa.strip(),
+            TenantId=target_tenant_id if target_tenant_id > 0 else None,
+            Tenant=tenant_name,
+        )
+        tdb.add(row)
+        try:
+            tdb.commit()
+        except IntegrityError:
+            tdb.rollback()
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Falha ao criar executivo")
+        tdb.refresh(row)
     return ExecutivoOut(
         IdExecutivo=row.IdExecutivo,
         Executivo=row.Executivo,
         Funcao=row.Funcao,
         Perfil=row.Perfil,
         Empresa=row.Empresa,
+        TenantId=getattr(row, "TenantId", None),
+        Tenant=getattr(row, "Tenant", None),
     )
 
 
 @app.put("/api/executivos/{id_executivo}", response_model=ExecutivoOut)
-def update_executivo(id_executivo: int, payload: ExecutivoUpdate, db: Session = Depends(get_db)) -> ExecutivoOut:
-    row = db.get(ExecutivoModel, id_executivo)
-    if not row:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Executivo não encontrado")
+def update_executivo(
+    id_executivo: int,
+    payload: ExecutivoUpdate,
+    tenant_id: Optional[int] = Query(None, alias="tenant_id"),
+    db: Session = Depends(get_tenant_db),
+    auth: dict[str, Any] = Depends(_require_auth),
+) -> ExecutivoOut:
+    auth_tenant_id = int(auth.get("tenant_id") or 0)
+    target_tenant_id = int(tenant_id) if (tenant_id is not None and (_is_superadmin(auth) or _is_executive_tenant(auth))) else auth_tenant_id
+    target_meta = _tenant_meta_from_id(target_tenant_id) if target_tenant_id > 0 else None
+    tenant_name = (target_meta[2] if target_meta else None) or _tenant_name_from_id(auth_tenant_id) or str(auth.get("tenant_slug") or "").strip() or None
 
-    data: dict[str, Any] = payload.model_dump(exclude_unset=True)
-    for k, v in data.items():
-        if v is None:
-            continue
-        setattr(row, k, v.strip() if isinstance(v, str) else v)
+    with _target_tenant_session(db=db, auth=auth, tenant_id=tenant_id) as tdb:
+        row = tdb.get(ExecutivoModel, id_executivo)
+        if not row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Executivo não encontrado")
 
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Falha ao atualizar executivo")
-    db.refresh(row)
+        data: dict[str, Any] = payload.model_dump(exclude_unset=True)
+        for k, v in data.items():
+            if v is None:
+                continue
+            setattr(row, k, v.strip() if isinstance(v, str) else v)
+
+        if target_tenant_id > 0 and (getattr(row, "TenantId", None) is None or int(getattr(row, "TenantId") or 0) == 0):
+            row.TenantId = target_tenant_id
+        if not getattr(row, "Tenant", None):
+            row.Tenant = tenant_name
+
+        try:
+            tdb.commit()
+        except IntegrityError:
+            tdb.rollback()
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Falha ao atualizar executivo")
+        tdb.refresh(row)
     return ExecutivoOut(
         IdExecutivo=row.IdExecutivo,
         Executivo=row.Executivo,
         Funcao=row.Funcao,
         Perfil=row.Perfil,
         Empresa=row.Empresa,
+        TenantId=getattr(row, "TenantId", None),
+        Tenant=getattr(row, "Tenant", None),
     )
 
 
 @app.delete("/api/executivos/{id_executivo}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_executivo(id_executivo: int, db: Session = Depends(get_db)) -> None:
-    row = db.get(ExecutivoModel, id_executivo)
-    if not row:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Executivo não encontrado")
-    db.delete(row)
-    db.commit()
+def delete_executivo(
+    id_executivo: int,
+    tenant_id: Optional[int] = Query(None, alias="tenant_id"),
+    db: Session = Depends(get_tenant_db),
+    auth: dict[str, Any] = Depends(_require_auth),
+) -> None:
+    with _target_tenant_session(db=db, auth=auth, tenant_id=tenant_id) as tdb:
+        row = tdb.get(ExecutivoModel, id_executivo)
+        if not row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Executivo não encontrado")
+        tdb.delete(row)
+        tdb.commit()
 
 
 def _ativo_as_out(row: AtivoModel) -> AtivoOut:
@@ -1207,24 +1938,55 @@ def _ativo_as_out(row: AtivoModel) -> AtivoOut:
         Responsavel=row.Responsavel,
         Atribuido=row.Atribuido,
         Empresa=row.Empresa,
+        TenantId=getattr(row, "TenantId", None),
+        Tenant=getattr(row, "Tenant", None),
     )
 
 
 @app.get("/api/ativos", response_model=list[AtivoOut])
 def list_ativos(
-    empresa: Optional[str] = None, db: Session = Depends(get_db), auth: Optional[dict[str, Any]] = Depends(_get_auth)
+    empresa: Optional[str] = None,
+    db: Session = Depends(get_tenant_db),
+    auth: dict[str, Any] = Depends(_require_auth),
 ) -> list[AtivoOut]:
-    if not empresa and not (_is_superadmin(auth) or _is_executive_tenant(auth)):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Não autorizado")
-    stmt = select(AtivoModel)
-    if empresa:
-        stmt = stmt.where(AtivoModel.Empresa == empresa)
-    rows = db.execute(stmt.order_by(AtivoModel.IdAtivo.asc())).scalars().all()
+    empresa_in = empresa.strip() if isinstance(empresa, str) and empresa.strip() else None
+    if _is_executive_tenant(auth) and empresa_in and empresa_in.strip().lower() == "executive":
+        empresa_in = None
+
+    if _is_superadmin(auth) or _is_executive_tenant(auth):
+        stmt_tenants = select(TenantsModel)
+        if empresa_in:
+            stmt_tenants = stmt_tenants.where(or_(TenantsModel.Tenant == empresa_in, TenantsModel.Slug == empresa_in.lower()))
+        tenants = db.execute(stmt_tenants.order_by(TenantsModel.IdTenant.asc())).scalars().all()
+
+        out: list[AtivoOut] = []
+        for t in tenants:
+            _ensure_tenant_columns_for_auth(tenant_id=int(t.IdTenant), tenant_slug=str(t.Slug or ""))
+            if str(t.Slug or "").lower() == "executive":
+                stmt = select(AtivoModel).where(AtivoModel.Empresa == str(t.Tenant)).order_by(AtivoModel.IdAtivo.asc())
+                rows = db.execute(stmt).scalars().all()
+            else:
+                db_name = _tenant_db_name(tenant_id=int(t.IdTenant), slug=str(t.Slug))
+                TenantSession = _tenant_sessionmaker(db_name)
+                with TenantSession() as tdb:
+                    stmt = select(AtivoModel).order_by(AtivoModel.IdAtivo.asc())
+                    rows = tdb.execute(stmt).scalars().all()
+            out.extend([_ativo_as_out(r) for r in rows])
+
+        out.sort(key=lambda r: (str(r.Empresa or ""), int(r.IdAtivo or 0)))
+        return out
+
+    stmt = select(AtivoModel).order_by(AtivoModel.IdAtivo.asc())
+    rows = db.execute(stmt).scalars().all()
     return [_ativo_as_out(r) for r in rows]
 
 
 @app.get("/api/ativos/{id_ativo}", response_model=AtivoOut)
-def get_ativo(id_ativo: int, db: Session = Depends(get_db)) -> AtivoOut:
+def get_ativo(
+    id_ativo: int,
+    db: Session = Depends(get_tenant_db),
+    auth: dict[str, Any] = Depends(_require_auth),
+) -> AtivoOut:
     row = db.get(AtivoModel, id_ativo)
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ativo não encontrado")
@@ -1232,57 +1994,93 @@ def get_ativo(id_ativo: int, db: Session = Depends(get_db)) -> AtivoOut:
 
 
 @app.post("/api/ativos", response_model=AtivoOut, status_code=status.HTTP_201_CREATED)
-def create_ativo(payload: AtivoCreate, db: Session = Depends(get_db)) -> AtivoOut:
-    row = AtivoModel(
-        Ativo=payload.Ativo.strip(),
-        CodigoInternoAtivo=payload.CodigoInternoAtivo.strip() if isinstance(payload.CodigoInternoAtivo, str) else None,
-        Placa=payload.Placa.strip() if isinstance(payload.Placa, str) else None,
-        Cidade=payload.Cidade.strip() if isinstance(payload.Cidade, str) else None,
-        UF=payload.UF.strip() if isinstance(payload.UF, str) else None,
-        CentroCusto=payload.CentroCusto.strip() if isinstance(payload.CentroCusto, str) else None,
-        Proprietario=payload.Proprietario.strip() if isinstance(payload.Proprietario, str) else None,
-        Responsavel=payload.Responsavel.strip() if isinstance(payload.Responsavel, str) else None,
-        Atribuido=payload.Atribuido.strip() if isinstance(payload.Atribuido, str) else None,
-        Empresa=payload.Empresa.strip(),
-    )
-    db.add(row)
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Falha ao criar ativo")
-    db.refresh(row)
-    return _ativo_as_out(row)
+def create_ativo(
+    payload: AtivoCreate,
+    tenant_id: Optional[int] = Query(None, alias="tenant_id"),
+    db: Session = Depends(get_tenant_db),
+    auth: dict[str, Any] = Depends(_require_auth),
+) -> AtivoOut:
+    auth_tenant_id = int(auth.get("tenant_id") or 0)
+    target_tenant_id = int(tenant_id) if (tenant_id is not None and (_is_superadmin(auth) or _is_executive_tenant(auth))) else auth_tenant_id
+    target_meta = _tenant_meta_from_id(target_tenant_id) if target_tenant_id > 0 else None
+    tenant_name = (target_meta[2] if target_meta else None) or _tenant_name_from_id(auth_tenant_id) or str(auth.get("tenant_slug") or "").strip() or None
+
+    with _target_tenant_session(db=db, auth=auth, tenant_id=tenant_id) as tdb:
+        row = AtivoModel(
+            Ativo=payload.Ativo.strip(),
+            CodigoInternoAtivo=payload.CodigoInternoAtivo.strip() if isinstance(payload.CodigoInternoAtivo, str) else None,
+            Placa=payload.Placa.strip() if isinstance(payload.Placa, str) else None,
+            Cidade=payload.Cidade.strip() if isinstance(payload.Cidade, str) else None,
+            UF=payload.UF.strip() if isinstance(payload.UF, str) else None,
+            CentroCusto=payload.CentroCusto.strip() if isinstance(payload.CentroCusto, str) else None,
+            Proprietario=payload.Proprietario.strip() if isinstance(payload.Proprietario, str) else None,
+            Responsavel=payload.Responsavel.strip() if isinstance(payload.Responsavel, str) else None,
+            Atribuido=payload.Atribuido.strip() if isinstance(payload.Atribuido, str) else None,
+            Empresa=payload.Empresa.strip(),
+            TenantId=target_tenant_id if target_tenant_id > 0 else None,
+            Tenant=tenant_name,
+        )
+        tdb.add(row)
+        try:
+            tdb.commit()
+        except IntegrityError:
+            tdb.rollback()
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Falha ao criar ativo")
+        tdb.refresh(row)
+        return _ativo_as_out(row)
 
 
 @app.put("/api/ativos/{id_ativo}", response_model=AtivoOut)
-def update_ativo(id_ativo: int, payload: AtivoUpdate, db: Session = Depends(get_db)) -> AtivoOut:
-    row = db.get(AtivoModel, id_ativo)
-    if not row:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ativo não encontrado")
+def update_ativo(
+    id_ativo: int,
+    payload: AtivoUpdate,
+    tenant_id: Optional[int] = Query(None, alias="tenant_id"),
+    db: Session = Depends(get_tenant_db),
+    auth: dict[str, Any] = Depends(_require_auth),
+) -> AtivoOut:
+    auth_tenant_id = int(auth.get("tenant_id") or 0)
+    target_tenant_id = int(tenant_id) if (tenant_id is not None and (_is_superadmin(auth) or _is_executive_tenant(auth))) else auth_tenant_id
+    target_meta = _tenant_meta_from_id(target_tenant_id) if target_tenant_id > 0 else None
+    tenant_name = (target_meta[2] if target_meta else None) or _tenant_name_from_id(auth_tenant_id) or str(auth.get("tenant_slug") or "").strip() or None
 
-    data: dict[str, Any] = payload.model_dump(exclude_unset=True)
-    for k, v in data.items():
-        if isinstance(v, str):
-            v = v.strip()
-        setattr(row, k, v)
+    with _target_tenant_session(db=db, auth=auth, tenant_id=tenant_id) as tdb:
+        row = tdb.get(AtivoModel, id_ativo)
+        if not row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ativo não encontrado")
 
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Falha ao atualizar ativo")
-    db.refresh(row)
-    return _ativo_as_out(row)
+        data: dict[str, Any] = payload.model_dump(exclude_unset=True)
+        for k, v in data.items():
+            if isinstance(v, str):
+                v = v.strip()
+            setattr(row, k, v)
+
+        if target_tenant_id > 0 and (getattr(row, "TenantId", None) is None or int(getattr(row, "TenantId") or 0) == 0):
+            row.TenantId = target_tenant_id
+        if not getattr(row, "Tenant", None):
+            row.Tenant = tenant_name
+
+        try:
+            tdb.commit()
+        except IntegrityError:
+            tdb.rollback()
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Falha ao atualizar ativo")
+        tdb.refresh(row)
+        return _ativo_as_out(row)
 
 
 @app.delete("/api/ativos/{id_ativo}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_ativo(id_ativo: int, db: Session = Depends(get_db)) -> None:
-    row = db.get(AtivoModel, id_ativo)
-    if not row:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ativo não encontrado")
-    db.delete(row)
-    db.commit()
+def delete_ativo(
+    id_ativo: int,
+    tenant_id: Optional[int] = Query(None, alias="tenant_id"),
+    db: Session = Depends(get_tenant_db),
+    auth: dict[str, Any] = Depends(_require_auth),
+) -> None:
+    with _target_tenant_session(db=db, auth=auth, tenant_id=tenant_id) as tdb:
+        row = tdb.get(AtivoModel, id_ativo)
+        if not row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ativo não encontrado")
+        tdb.delete(row)
+        tdb.commit()
 
 
 def _centro_custos_as_out(row: CentroCustosModel) -> CentroCustosOut:
@@ -1296,24 +2094,59 @@ def _centro_custos_as_out(row: CentroCustosModel) -> CentroCustosOut:
         Empresa=row.Empresa,
         Departamento=row.Departamento,
         Responsavel=row.Responsavel,
+        TenantId=getattr(row, "TenantId", None),
+        Tenant=getattr(row, "Tenant", None),
     )
 
 
 @app.get("/api/centro-custos", response_model=list[CentroCustosOut])
 def list_centro_custos(
-    empresa: Optional[str] = None, db: Session = Depends(get_db), auth: Optional[dict[str, Any]] = Depends(_get_auth)
+    empresa: Optional[str] = None,
+    db: Session = Depends(get_tenant_db),
+    auth: dict[str, Any] = Depends(_require_auth),
 ) -> list[CentroCustosOut]:
-    if not empresa and not (_is_superadmin(auth) or _is_executive_tenant(auth)):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Não autorizado")
-    stmt = select(CentroCustosModel)
-    if empresa:
-        stmt = stmt.where(CentroCustosModel.Empresa == empresa)
-    rows = db.execute(stmt.order_by(CentroCustosModel.IdCustos.asc())).scalars().all()
+    empresa_in = empresa.strip() if isinstance(empresa, str) and empresa.strip() else None
+    if _is_executive_tenant(auth) and empresa_in and empresa_in.strip().lower() == "executive":
+        empresa_in = None
+
+    if _is_superadmin(auth) or _is_executive_tenant(auth):
+        stmt_tenants = select(TenantsModel)
+        if empresa_in:
+            stmt_tenants = stmt_tenants.where(or_(TenantsModel.Tenant == empresa_in, TenantsModel.Slug == empresa_in.lower()))
+        tenants = db.execute(stmt_tenants.order_by(TenantsModel.IdTenant.asc())).scalars().all()
+
+        out: list[CentroCustosOut] = []
+        for t in tenants:
+            _ensure_tenant_columns_for_auth(tenant_id=int(t.IdTenant), tenant_slug=str(t.Slug or ""))
+            if str(t.Slug or "").lower() == "executive":
+                stmt = (
+                    select(CentroCustosModel)
+                    .where(CentroCustosModel.Empresa == str(t.Tenant))
+                    .order_by(CentroCustosModel.IdCustos.asc())
+                )
+                rows = db.execute(stmt).scalars().all()
+            else:
+                db_name = _tenant_db_name(tenant_id=int(t.IdTenant), slug=str(t.Slug))
+                TenantSession = _tenant_sessionmaker(db_name)
+                with TenantSession() as tdb:
+                    stmt = select(CentroCustosModel).order_by(CentroCustosModel.IdCustos.asc())
+                    rows = tdb.execute(stmt).scalars().all()
+            out.extend([_centro_custos_as_out(r) for r in rows])
+
+        out.sort(key=lambda r: (str(r.Empresa or ""), int(r.IdCustos or 0)))
+        return out
+
+    stmt = select(CentroCustosModel).order_by(CentroCustosModel.IdCustos.asc())
+    rows = db.execute(stmt).scalars().all()
     return [_centro_custos_as_out(r) for r in rows]
 
 
 @app.get("/api/centro-custos/{id_custos}", response_model=CentroCustosOut)
-def get_centro_custos(id_custos: int, db: Session = Depends(get_db)) -> CentroCustosOut:
+def get_centro_custos(
+    id_custos: int,
+    db: Session = Depends(get_tenant_db),
+    auth: dict[str, Any] = Depends(_require_auth),
+) -> CentroCustosOut:
     row = db.get(CentroCustosModel, id_custos)
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Centro de custos não encontrado")
@@ -1321,55 +2154,545 @@ def get_centro_custos(id_custos: int, db: Session = Depends(get_db)) -> CentroCu
 
 
 @app.post("/api/centro-custos", response_model=CentroCustosOut, status_code=status.HTTP_201_CREATED)
-def create_centro_custos(payload: CentroCustosCreate, db: Session = Depends(get_db)) -> CentroCustosOut:
-    row = CentroCustosModel(
-        CodigoInterno=payload.CodigoInterno.strip() if isinstance(payload.CodigoInterno, str) else None,
-        Classe=payload.Classe.strip() if isinstance(payload.Classe, str) else None,
-        Nome=payload.Nome.strip(),
-        Cidade=payload.Cidade.strip() if isinstance(payload.Cidade, str) else None,
-        UF=payload.UF.strip() if isinstance(payload.UF, str) else None,
-        Empresa=payload.Empresa.strip(),
-        Departamento=payload.Departamento.strip() if isinstance(payload.Departamento, str) else None,
-        Responsavel=payload.Responsavel.strip() if isinstance(payload.Responsavel, str) else None,
-    )
-    db.add(row)
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Falha ao criar centro de custos")
-    db.refresh(row)
-    return _centro_custos_as_out(row)
+def create_centro_custos(
+    payload: CentroCustosCreate,
+    tenant_id: Optional[int] = Query(None, alias="tenant_id"),
+    db: Session = Depends(get_tenant_db),
+    auth: dict[str, Any] = Depends(_require_auth),
+) -> CentroCustosOut:
+    auth_tenant_id = int(auth.get("tenant_id") or 0)
+    target_tenant_id = int(tenant_id) if (tenant_id is not None and (_is_superadmin(auth) or _is_executive_tenant(auth))) else auth_tenant_id
+    target_meta = _tenant_meta_from_id(target_tenant_id) if target_tenant_id > 0 else None
+    tenant_name = (target_meta[2] if target_meta else None) or _tenant_name_from_id(auth_tenant_id) or str(auth.get("tenant_slug") or "").strip() or None
+
+    with _target_tenant_session(db=db, auth=auth, tenant_id=tenant_id) as tdb:
+        row = CentroCustosModel(
+            CodigoInterno=payload.CodigoInterno.strip() if isinstance(payload.CodigoInterno, str) else None,
+            Classe=payload.Classe.strip() if isinstance(payload.Classe, str) else None,
+            Nome=payload.Nome.strip(),
+            Cidade=payload.Cidade.strip() if isinstance(payload.Cidade, str) else None,
+            UF=payload.UF.strip() if isinstance(payload.UF, str) else None,
+            Empresa=payload.Empresa.strip(),
+            Departamento=payload.Departamento.strip() if isinstance(payload.Departamento, str) else None,
+            Responsavel=payload.Responsavel.strip() if isinstance(payload.Responsavel, str) else None,
+            TenantId=target_tenant_id if target_tenant_id > 0 else None,
+            Tenant=tenant_name,
+        )
+        tdb.add(row)
+        try:
+            tdb.commit()
+        except IntegrityError:
+            tdb.rollback()
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Falha ao criar centro de custos")
+        tdb.refresh(row)
+        return _centro_custos_as_out(row)
 
 
 @app.put("/api/centro-custos/{id_custos}", response_model=CentroCustosOut)
-def update_centro_custos(id_custos: int, payload: CentroCustosUpdate, db: Session = Depends(get_db)) -> CentroCustosOut:
-    row = db.get(CentroCustosModel, id_custos)
-    if not row:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Centro de custos não encontrado")
+def update_centro_custos(
+    id_custos: int,
+    payload: CentroCustosUpdate,
+    tenant_id: Optional[int] = Query(None, alias="tenant_id"),
+    db: Session = Depends(get_tenant_db),
+    auth: dict[str, Any] = Depends(_require_auth),
+) -> CentroCustosOut:
+    auth_tenant_id = int(auth.get("tenant_id") or 0)
+    target_tenant_id = int(tenant_id) if (tenant_id is not None and (_is_superadmin(auth) or _is_executive_tenant(auth))) else auth_tenant_id
+    target_meta = _tenant_meta_from_id(target_tenant_id) if target_tenant_id > 0 else None
+    tenant_name = (target_meta[2] if target_meta else None) or _tenant_name_from_id(auth_tenant_id) or str(auth.get("tenant_slug") or "").strip() or None
 
-    data: dict[str, Any] = payload.model_dump(exclude_unset=True)
-    for k, v in data.items():
-        if isinstance(v, str):
-            v = v.strip()
-        setattr(row, k, v)
+    with _target_tenant_session(db=db, auth=auth, tenant_id=tenant_id) as tdb:
+        row = tdb.get(CentroCustosModel, id_custos)
+        if not row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Centro de custos não encontrado")
 
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Falha ao atualizar centro de custos")
-    db.refresh(row)
-    return _centro_custos_as_out(row)
+        data: dict[str, Any] = payload.model_dump(exclude_unset=True)
+        for k, v in data.items():
+            if isinstance(v, str):
+                v = v.strip()
+            setattr(row, k, v)
+
+        if target_tenant_id > 0 and (getattr(row, "TenantId", None) is None or int(getattr(row, "TenantId") or 0) == 0):
+            row.TenantId = target_tenant_id
+        if not getattr(row, "Tenant", None):
+            row.Tenant = tenant_name
+
+        try:
+            tdb.commit()
+        except IntegrityError:
+            tdb.rollback()
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Falha ao atualizar centro de custos")
+        tdb.refresh(row)
+        return _centro_custos_as_out(row)
 
 
 @app.delete("/api/centro-custos/{id_custos}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_centro_custos(id_custos: int, db: Session = Depends(get_db)) -> None:
-    row = db.get(CentroCustosModel, id_custos)
-    if not row:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Centro de custos não encontrado")
-    db.delete(row)
-    db.commit()
+def delete_centro_custos(
+    id_custos: int,
+    tenant_id: Optional[int] = Query(None, alias="tenant_id"),
+    db: Session = Depends(get_tenant_db),
+    auth: dict[str, Any] = Depends(_require_auth),
+) -> None:
+    with _target_tenant_session(db=db, auth=auth, tenant_id=tenant_id) as tdb:
+        row = tdb.get(CentroCustosModel, id_custos)
+        if not row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Centro de custos não encontrado")
+        tdb.delete(row)
+        tdb.commit()
+
+
+def _departamento_as_out(row: DepartamentoModel) -> DepartamentoOut:
+    return DepartamentoOut(
+        IdDepartamento=row.IdDepartamento,
+        Departamento=row.Departamento,
+        Descricao=row.Descricao,
+        IdTenant=getattr(row, "IdTenant", None),
+        Tenant=getattr(row, "Tenant", None),
+        DataCadastro=getattr(row, "DataCadastro", None),
+        Cadastrante=getattr(row, "Cadastrante", None),
+    )
+
+
+def _funcao_as_out(row: FuncaoModel) -> FuncaoOut:
+    return FuncaoOut(
+        IdFuncao=row.IdFuncao,
+        Funcao=row.Funcao,
+        Descricao=row.Descricao,
+        Departamento=row.Departamento,
+        IdTenant=getattr(row, "IdTenant", None),
+        Tenant=getattr(row, "Tenant", None),
+        DataCadastro=getattr(row, "DataCadastro", None),
+        Cadastrante=getattr(row, "Cadastrante", None),
+    )
+
+
+def _colaborador_as_out(row: ColaboradorModel) -> ColaboradorOut:
+    return ColaboradorOut(
+        IdColaborador=row.IdColaborador,
+        Colaborador=row.Colaborador,
+        Descricao=row.Descricao,
+        Funcao=row.Funcao,
+        IdTenant=getattr(row, "IdTenant", None),
+        Tenant=getattr(row, "Tenant", None),
+        DataCadastro=getattr(row, "DataCadastro", None),
+        Cadastrante=getattr(row, "Cadastrante", None),
+    )
+
+
+@app.get("/api/departamentos", response_model=list[DepartamentoOut])
+def list_departamentos(
+    tenant_id: Optional[int] = Query(None, alias="tenant_id"),
+    db: Session = Depends(get_tenant_db),
+    auth: dict[str, Any] = Depends(_require_auth),
+) -> list[DepartamentoOut]:
+    auth_tenant_id = int(auth.get("tenant_id") or 0)
+    auth_tenant_slug = str(auth.get("tenant_slug") or "").strip().lower()
+    _ensure_gestao_interna_tables_for_auth(tenant_id=auth_tenant_id, tenant_slug=auth_tenant_slug)
+
+    if (_is_superadmin(auth) or _is_executive_tenant(auth)) and tenant_id is not None:
+        with _target_tenant_session(db=db, auth=auth, tenant_id=tenant_id) as tdb:
+            rows = tdb.execute(select(DepartamentoModel).order_by(DepartamentoModel.IdDepartamento.asc())).scalars().all()
+            return [_departamento_as_out(r) for r in rows]
+
+    if _is_superadmin(auth) or _is_executive_tenant(auth):
+        tenants = db.execute(select(TenantsModel).order_by(TenantsModel.IdTenant.asc())).scalars().all()
+        out: list[DepartamentoOut] = []
+        for t in tenants:
+            slug = str(t.Slug or "").strip().lower()
+            _ensure_gestao_interna_tables_for_auth(tenant_id=int(t.IdTenant), tenant_slug=slug)
+            if slug == "executive":
+                rows = db.execute(select(DepartamentoModel).order_by(DepartamentoModel.IdDepartamento.asc())).scalars().all()
+            else:
+                db_name = _tenant_db_name(tenant_id=int(t.IdTenant), slug=slug)
+                TenantSession = _tenant_sessionmaker(db_name)
+                with TenantSession() as tdb:
+                    rows = tdb.execute(select(DepartamentoModel).order_by(DepartamentoModel.IdDepartamento.asc())).scalars().all()
+            out.extend([_departamento_as_out(r) for r in rows])
+        out.sort(key=lambda r: (str(r.Tenant or ""), int(r.IdDepartamento or 0)))
+        return out
+
+    rows = db.execute(select(DepartamentoModel).order_by(DepartamentoModel.IdDepartamento.asc())).scalars().all()
+    return [_departamento_as_out(r) for r in rows]
+
+
+@app.get("/api/departamentos/{id_departamento}", response_model=DepartamentoOut)
+def get_departamento(
+    id_departamento: int,
+    tenant_id: Optional[int] = Query(None, alias="tenant_id"),
+    db: Session = Depends(get_tenant_db),
+    auth: dict[str, Any] = Depends(_require_auth),
+) -> DepartamentoOut:
+    auth_tenant_id = int(auth.get("tenant_id") or 0)
+    auth_tenant_slug = str(auth.get("tenant_slug") or "").strip().lower()
+    _ensure_gestao_interna_tables_for_auth(tenant_id=auth_tenant_id, tenant_slug=auth_tenant_slug)
+    with _target_tenant_session(db=db, auth=auth, tenant_id=tenant_id) as tdb:
+        row = tdb.get(DepartamentoModel, id_departamento)
+        if not row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Departamento não encontrado")
+        return _departamento_as_out(row)
+
+
+@app.post("/api/departamentos", response_model=DepartamentoOut, status_code=status.HTTP_201_CREATED)
+def create_departamento(
+    payload: DepartamentoCreate,
+    tenant_id: Optional[int] = Query(None, alias="tenant_id"),
+    db: Session = Depends(get_tenant_db),
+    auth: dict[str, Any] = Depends(_require_auth),
+) -> DepartamentoOut:
+    auth_tenant_id = int(auth.get("tenant_id") or 0)
+    target_tenant_id = int(tenant_id) if (tenant_id is not None and (_is_superadmin(auth) or _is_executive_tenant(auth))) else auth_tenant_id
+    target_meta = _tenant_meta_from_id(target_tenant_id) if target_tenant_id > 0 else None
+    tenant_slug = (target_meta[1] if target_meta else None) or str(auth.get("tenant_slug") or "").strip().lower()
+    tenant_name = (target_meta[2] if target_meta else None) or _tenant_name_from_id(auth_tenant_id) or tenant_slug or None
+    _ensure_gestao_interna_tables_for_auth(tenant_id=target_tenant_id, tenant_slug=tenant_slug)
+
+    with _target_tenant_session(db=db, auth=auth, tenant_id=tenant_id) as tdb:
+        row = DepartamentoModel(
+            Departamento=payload.Departamento.strip(),
+            Descricao=payload.Descricao.strip() if isinstance(payload.Descricao, str) else None,
+            IdTenant=target_tenant_id if target_tenant_id > 0 else None,
+            Tenant=tenant_name,
+            DataCadastro=date.today(),
+            Cadastrante=str(auth.get("nome") or auth.get("usuario") or "").strip() or None,
+        )
+        tdb.add(row)
+        try:
+            tdb.commit()
+        except IntegrityError:
+            tdb.rollback()
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Falha ao criar departamento")
+        tdb.refresh(row)
+        return _departamento_as_out(row)
+
+
+@app.put("/api/departamentos/{id_departamento}", response_model=DepartamentoOut)
+def update_departamento(
+    id_departamento: int,
+    payload: DepartamentoUpdate,
+    tenant_id: Optional[int] = Query(None, alias="tenant_id"),
+    db: Session = Depends(get_tenant_db),
+    auth: dict[str, Any] = Depends(_require_auth),
+) -> DepartamentoOut:
+    auth_tenant_id = int(auth.get("tenant_id") or 0)
+    target_tenant_id = int(tenant_id) if (tenant_id is not None and (_is_superadmin(auth) or _is_executive_tenant(auth))) else auth_tenant_id
+    target_meta = _tenant_meta_from_id(target_tenant_id) if target_tenant_id > 0 else None
+    tenant_slug = (target_meta[1] if target_meta else None) or str(auth.get("tenant_slug") or "").strip().lower()
+    tenant_name = (target_meta[2] if target_meta else None) or _tenant_name_from_id(auth_tenant_id) or tenant_slug or None
+    _ensure_gestao_interna_tables_for_auth(tenant_id=target_tenant_id, tenant_slug=tenant_slug)
+
+    with _target_tenant_session(db=db, auth=auth, tenant_id=tenant_id) as tdb:
+        row = tdb.get(DepartamentoModel, id_departamento)
+        if not row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Departamento não encontrado")
+        data: dict[str, Any] = payload.model_dump(exclude_unset=True)
+        for k, v in data.items():
+            if isinstance(v, str):
+                v = v.strip()
+            setattr(row, k, v)
+        if getattr(row, "IdTenant", None) is None and target_tenant_id > 0:
+            row.IdTenant = target_tenant_id
+        if not getattr(row, "Tenant", None):
+            row.Tenant = tenant_name
+        try:
+            tdb.commit()
+        except IntegrityError:
+            tdb.rollback()
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Falha ao atualizar departamento")
+        tdb.refresh(row)
+        return _departamento_as_out(row)
+
+
+@app.delete("/api/departamentos/{id_departamento}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_departamento(
+    id_departamento: int,
+    tenant_id: Optional[int] = Query(None, alias="tenant_id"),
+    db: Session = Depends(get_tenant_db),
+    auth: dict[str, Any] = Depends(_require_auth),
+) -> None:
+    with _target_tenant_session(db=db, auth=auth, tenant_id=tenant_id) as tdb:
+        row = tdb.get(DepartamentoModel, id_departamento)
+        if not row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Departamento não encontrado")
+        tdb.delete(row)
+        tdb.commit()
+
+
+@app.get("/api/funcoes", response_model=list[FuncaoOut])
+def list_funcoes(
+    tenant_id: Optional[int] = Query(None, alias="tenant_id"),
+    db: Session = Depends(get_tenant_db),
+    auth: dict[str, Any] = Depends(_require_auth),
+) -> list[FuncaoOut]:
+    auth_tenant_id = int(auth.get("tenant_id") or 0)
+    auth_tenant_slug = str(auth.get("tenant_slug") or "").strip().lower()
+    _ensure_gestao_interna_tables_for_auth(tenant_id=auth_tenant_id, tenant_slug=auth_tenant_slug)
+
+    if (_is_superadmin(auth) or _is_executive_tenant(auth)) and tenant_id is not None:
+        with _target_tenant_session(db=db, auth=auth, tenant_id=tenant_id) as tdb:
+            rows = tdb.execute(select(FuncaoModel).order_by(FuncaoModel.IdFuncao.asc())).scalars().all()
+            return [_funcao_as_out(r) for r in rows]
+
+    if _is_superadmin(auth) or _is_executive_tenant(auth):
+        tenants = db.execute(select(TenantsModel).order_by(TenantsModel.IdTenant.asc())).scalars().all()
+        out: list[FuncaoOut] = []
+        for t in tenants:
+            slug = str(t.Slug or "").strip().lower()
+            _ensure_gestao_interna_tables_for_auth(tenant_id=int(t.IdTenant), tenant_slug=slug)
+            if slug == "executive":
+                rows = db.execute(select(FuncaoModel).order_by(FuncaoModel.IdFuncao.asc())).scalars().all()
+            else:
+                db_name = _tenant_db_name(tenant_id=int(t.IdTenant), slug=slug)
+                TenantSession = _tenant_sessionmaker(db_name)
+                with TenantSession() as tdb:
+                    rows = tdb.execute(select(FuncaoModel).order_by(FuncaoModel.IdFuncao.asc())).scalars().all()
+            out.extend([_funcao_as_out(r) for r in rows])
+        out.sort(key=lambda r: (str(r.Tenant or ""), int(r.IdFuncao or 0)))
+        return out
+
+    rows = db.execute(select(FuncaoModel).order_by(FuncaoModel.IdFuncao.asc())).scalars().all()
+    return [_funcao_as_out(r) for r in rows]
+
+
+@app.get("/api/funcoes/{id_funcao}", response_model=FuncaoOut)
+def get_funcao(
+    id_funcao: int,
+    tenant_id: Optional[int] = Query(None, alias="tenant_id"),
+    db: Session = Depends(get_tenant_db),
+    auth: dict[str, Any] = Depends(_require_auth),
+) -> FuncaoOut:
+    auth_tenant_id = int(auth.get("tenant_id") or 0)
+    auth_tenant_slug = str(auth.get("tenant_slug") or "").strip().lower()
+    _ensure_gestao_interna_tables_for_auth(tenant_id=auth_tenant_id, tenant_slug=auth_tenant_slug)
+    with _target_tenant_session(db=db, auth=auth, tenant_id=tenant_id) as tdb:
+        row = tdb.get(FuncaoModel, id_funcao)
+        if not row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Função não encontrada")
+        return _funcao_as_out(row)
+
+
+@app.post("/api/funcoes", response_model=FuncaoOut, status_code=status.HTTP_201_CREATED)
+def create_funcao(
+    payload: FuncaoCreate,
+    tenant_id: Optional[int] = Query(None, alias="tenant_id"),
+    db: Session = Depends(get_tenant_db),
+    auth: dict[str, Any] = Depends(_require_auth),
+) -> FuncaoOut:
+    auth_tenant_id = int(auth.get("tenant_id") or 0)
+    target_tenant_id = int(tenant_id) if (tenant_id is not None and (_is_superadmin(auth) or _is_executive_tenant(auth))) else auth_tenant_id
+    target_meta = _tenant_meta_from_id(target_tenant_id) if target_tenant_id > 0 else None
+    tenant_slug = (target_meta[1] if target_meta else None) or str(auth.get("tenant_slug") or "").strip().lower()
+    tenant_name = (target_meta[2] if target_meta else None) or _tenant_name_from_id(auth_tenant_id) or tenant_slug or None
+    _ensure_gestao_interna_tables_for_auth(tenant_id=target_tenant_id, tenant_slug=tenant_slug)
+
+    with _target_tenant_session(db=db, auth=auth, tenant_id=tenant_id) as tdb:
+        row = FuncaoModel(
+            Funcao=payload.Funcao.strip(),
+            Descricao=payload.Descricao.strip() if isinstance(payload.Descricao, str) else None,
+            Departamento=payload.Departamento.strip(),
+            IdTenant=target_tenant_id if target_tenant_id > 0 else None,
+            Tenant=tenant_name,
+            DataCadastro=date.today(),
+            Cadastrante=str(auth.get("nome") or auth.get("usuario") or "").strip() or None,
+        )
+        tdb.add(row)
+        try:
+            tdb.commit()
+        except IntegrityError:
+            tdb.rollback()
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Falha ao criar função")
+        tdb.refresh(row)
+        return _funcao_as_out(row)
+
+
+@app.put("/api/funcoes/{id_funcao}", response_model=FuncaoOut)
+def update_funcao(
+    id_funcao: int,
+    payload: FuncaoUpdate,
+    tenant_id: Optional[int] = Query(None, alias="tenant_id"),
+    db: Session = Depends(get_tenant_db),
+    auth: dict[str, Any] = Depends(_require_auth),
+) -> FuncaoOut:
+    auth_tenant_id = int(auth.get("tenant_id") or 0)
+    target_tenant_id = int(tenant_id) if (tenant_id is not None and (_is_superadmin(auth) or _is_executive_tenant(auth))) else auth_tenant_id
+    target_meta = _tenant_meta_from_id(target_tenant_id) if target_tenant_id > 0 else None
+    tenant_slug = (target_meta[1] if target_meta else None) or str(auth.get("tenant_slug") or "").strip().lower()
+    tenant_name = (target_meta[2] if target_meta else None) or _tenant_name_from_id(auth_tenant_id) or tenant_slug or None
+    _ensure_gestao_interna_tables_for_auth(tenant_id=target_tenant_id, tenant_slug=tenant_slug)
+
+    with _target_tenant_session(db=db, auth=auth, tenant_id=tenant_id) as tdb:
+        row = tdb.get(FuncaoModel, id_funcao)
+        if not row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Função não encontrada")
+        data: dict[str, Any] = payload.model_dump(exclude_unset=True)
+        for k, v in data.items():
+            if isinstance(v, str):
+                v = v.strip()
+            setattr(row, k, v)
+        if getattr(row, "IdTenant", None) is None and target_tenant_id > 0:
+            row.IdTenant = target_tenant_id
+        if not getattr(row, "Tenant", None):
+            row.Tenant = tenant_name
+        try:
+            tdb.commit()
+        except IntegrityError:
+            tdb.rollback()
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Falha ao atualizar função")
+        tdb.refresh(row)
+        return _funcao_as_out(row)
+
+
+@app.delete("/api/funcoes/{id_funcao}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_funcao(
+    id_funcao: int,
+    tenant_id: Optional[int] = Query(None, alias="tenant_id"),
+    db: Session = Depends(get_tenant_db),
+    auth: dict[str, Any] = Depends(_require_auth),
+) -> None:
+    with _target_tenant_session(db=db, auth=auth, tenant_id=tenant_id) as tdb:
+        row = tdb.get(FuncaoModel, id_funcao)
+        if not row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Função não encontrada")
+        tdb.delete(row)
+        tdb.commit()
+
+
+@app.get("/api/colaboradores", response_model=list[ColaboradorOut])
+def list_colaboradores(
+    tenant_id: Optional[int] = Query(None, alias="tenant_id"),
+    db: Session = Depends(get_tenant_db),
+    auth: dict[str, Any] = Depends(_require_auth),
+) -> list[ColaboradorOut]:
+    auth_tenant_id = int(auth.get("tenant_id") or 0)
+    auth_tenant_slug = str(auth.get("tenant_slug") or "").strip().lower()
+    _ensure_gestao_interna_tables_for_auth(tenant_id=auth_tenant_id, tenant_slug=auth_tenant_slug)
+
+    if (_is_superadmin(auth) or _is_executive_tenant(auth)) and tenant_id is not None:
+        with _target_tenant_session(db=db, auth=auth, tenant_id=tenant_id) as tdb:
+            rows = tdb.execute(select(ColaboradorModel).order_by(ColaboradorModel.IdColaborador.asc())).scalars().all()
+            return [_colaborador_as_out(r) for r in rows]
+
+    if _is_superadmin(auth) or _is_executive_tenant(auth):
+        tenants = db.execute(select(TenantsModel).order_by(TenantsModel.IdTenant.asc())).scalars().all()
+        out: list[ColaboradorOut] = []
+        for t in tenants:
+            slug = str(t.Slug or "").strip().lower()
+            _ensure_gestao_interna_tables_for_auth(tenant_id=int(t.IdTenant), tenant_slug=slug)
+            if slug == "executive":
+                rows = db.execute(select(ColaboradorModel).order_by(ColaboradorModel.IdColaborador.asc())).scalars().all()
+            else:
+                db_name = _tenant_db_name(tenant_id=int(t.IdTenant), slug=slug)
+                TenantSession = _tenant_sessionmaker(db_name)
+                with TenantSession() as tdb:
+                    rows = tdb.execute(select(ColaboradorModel).order_by(ColaboradorModel.IdColaborador.asc())).scalars().all()
+            out.extend([_colaborador_as_out(r) for r in rows])
+        out.sort(key=lambda r: (str(r.Tenant or ""), int(r.IdColaborador or 0)))
+        return out
+
+    rows = db.execute(select(ColaboradorModel).order_by(ColaboradorModel.IdColaborador.asc())).scalars().all()
+    return [_colaborador_as_out(r) for r in rows]
+
+
+@app.get("/api/colaboradores/{id_colaborador}", response_model=ColaboradorOut)
+def get_colaborador(
+    id_colaborador: int,
+    tenant_id: Optional[int] = Query(None, alias="tenant_id"),
+    db: Session = Depends(get_tenant_db),
+    auth: dict[str, Any] = Depends(_require_auth),
+) -> ColaboradorOut:
+    auth_tenant_id = int(auth.get("tenant_id") or 0)
+    auth_tenant_slug = str(auth.get("tenant_slug") or "").strip().lower()
+    _ensure_gestao_interna_tables_for_auth(tenant_id=auth_tenant_id, tenant_slug=auth_tenant_slug)
+    with _target_tenant_session(db=db, auth=auth, tenant_id=tenant_id) as tdb:
+        row = tdb.get(ColaboradorModel, id_colaborador)
+        if not row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Colaborador não encontrado")
+        return _colaborador_as_out(row)
+
+
+@app.post("/api/colaboradores", response_model=ColaboradorOut, status_code=status.HTTP_201_CREATED)
+def create_colaborador(
+    payload: ColaboradorCreate,
+    tenant_id: Optional[int] = Query(None, alias="tenant_id"),
+    db: Session = Depends(get_tenant_db),
+    auth: dict[str, Any] = Depends(_require_auth),
+) -> ColaboradorOut:
+    auth_tenant_id = int(auth.get("tenant_id") or 0)
+    target_tenant_id = int(tenant_id) if (tenant_id is not None and (_is_superadmin(auth) or _is_executive_tenant(auth))) else auth_tenant_id
+    target_meta = _tenant_meta_from_id(target_tenant_id) if target_tenant_id > 0 else None
+    tenant_slug = (target_meta[1] if target_meta else None) or str(auth.get("tenant_slug") or "").strip().lower()
+    tenant_name = (target_meta[2] if target_meta else None) or _tenant_name_from_id(auth_tenant_id) or tenant_slug or None
+    _ensure_gestao_interna_tables_for_auth(tenant_id=target_tenant_id, tenant_slug=tenant_slug)
+
+    with _target_tenant_session(db=db, auth=auth, tenant_id=tenant_id) as tdb:
+        row = ColaboradorModel(
+            Colaborador=payload.Colaborador.strip(),
+            Descricao=payload.Descricao.strip() if isinstance(payload.Descricao, str) else None,
+            Funcao=payload.Funcao.strip(),
+            IdTenant=target_tenant_id if target_tenant_id > 0 else None,
+            Tenant=tenant_name,
+            DataCadastro=date.today(),
+            Cadastrante=str(auth.get("nome") or auth.get("usuario") or "").strip() or None,
+        )
+        tdb.add(row)
+        try:
+            tdb.commit()
+        except IntegrityError:
+            tdb.rollback()
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Falha ao criar colaborador")
+        tdb.refresh(row)
+        return _colaborador_as_out(row)
+
+
+@app.put("/api/colaboradores/{id_colaborador}", response_model=ColaboradorOut)
+def update_colaborador(
+    id_colaborador: int,
+    payload: ColaboradorUpdate,
+    tenant_id: Optional[int] = Query(None, alias="tenant_id"),
+    db: Session = Depends(get_tenant_db),
+    auth: dict[str, Any] = Depends(_require_auth),
+) -> ColaboradorOut:
+    auth_tenant_id = int(auth.get("tenant_id") or 0)
+    target_tenant_id = int(tenant_id) if (tenant_id is not None and (_is_superadmin(auth) or _is_executive_tenant(auth))) else auth_tenant_id
+    target_meta = _tenant_meta_from_id(target_tenant_id) if target_tenant_id > 0 else None
+    tenant_slug = (target_meta[1] if target_meta else None) or str(auth.get("tenant_slug") or "").strip().lower()
+    tenant_name = (target_meta[2] if target_meta else None) or _tenant_name_from_id(auth_tenant_id) or tenant_slug or None
+    _ensure_gestao_interna_tables_for_auth(tenant_id=target_tenant_id, tenant_slug=tenant_slug)
+
+    with _target_tenant_session(db=db, auth=auth, tenant_id=tenant_id) as tdb:
+        row = tdb.get(ColaboradorModel, id_colaborador)
+        if not row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Colaborador não encontrado")
+        data: dict[str, Any] = payload.model_dump(exclude_unset=True)
+        for k, v in data.items():
+            if isinstance(v, str):
+                v = v.strip()
+            setattr(row, k, v)
+        if getattr(row, "IdTenant", None) is None and target_tenant_id > 0:
+            row.IdTenant = target_tenant_id
+        if not getattr(row, "Tenant", None):
+            row.Tenant = tenant_name
+        try:
+            tdb.commit()
+        except IntegrityError:
+            tdb.rollback()
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Falha ao atualizar colaborador")
+        tdb.refresh(row)
+        return _colaborador_as_out(row)
+
+
+@app.delete("/api/colaboradores/{id_colaborador}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_colaborador(
+    id_colaborador: int,
+    tenant_id: Optional[int] = Query(None, alias="tenant_id"),
+    db: Session = Depends(get_tenant_db),
+    auth: dict[str, Any] = Depends(_require_auth),
+) -> None:
+    with _target_tenant_session(db=db, auth=auth, tenant_id=tenant_id) as tdb:
+        row = tdb.get(ColaboradorModel, id_colaborador)
+        if not row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Colaborador não encontrado")
+        tdb.delete(row)
+        tdb.commit()
 
 
 def _sanitize_identifier(value: str) -> str:
@@ -1471,6 +2794,7 @@ def _create_db_schema(db_name: str, schema_name: str) -> None:
     tenant_engine = _tenant_engine(db_name=db_name)
     with tenant_engine.connect() as conn:
         conn.exec_driver_sql(f'CREATE SCHEMA IF NOT EXISTS "{schema_name}"')
+        conn.exec_driver_sql("DROP SCHEMA IF EXISTS public CASCADE")
         conn.commit()
 
     meta = MetaData()
@@ -1495,6 +2819,93 @@ def _create_db_schema(db_name: str, schema_name: str) -> None:
                 table.constraints.discard(constraint)
 
     meta.create_all(bind=tenant_engine, checkfirst=True)
+
+
+def _drop_public_schema_existing_tenant_databases() -> None:
+    if not DATABASE_URL.startswith("postgresql"):
+        return
+
+    url = make_url(DATABASE_URL)
+    admin_db = os.getenv("POSTGRES_ADMIN_DB")
+    if not admin_db or not str(admin_db).strip():
+        admin_db = str(url.database or "").strip() or "postgres"
+    admin_url = url.set(database=admin_db)
+    admin_url_str = admin_url.render_as_string(hide_password=False)
+    admin_connect_args = _connect_args(admin_url_str)
+    admin_engine = create_engine(
+        admin_url_str,
+        connect_args=admin_connect_args,
+        isolation_level="AUTOCOMMIT",
+        pool_pre_ping=True,
+    )
+
+    with SessionLocal() as db:
+        tenants = db.execute(select(TenantsModel).order_by(TenantsModel.IdTenant.asc())).scalars().all()
+
+    for t in tenants:
+        if str(t.Slug or "").strip().lower() == "executive":
+            continue
+        db_name = _sanitize_db_name(_tenant_db_name(tenant_id=int(t.IdTenant), slug=str(t.Slug or "")))
+        with admin_engine.connect() as conn:
+            exists = conn.execute(text("select 1 from pg_database where datname=:n"), {"n": db_name}).first()
+            if not exists:
+                continue
+        tenant_engine = _tenant_engine(db_name=db_name)
+        with tenant_engine.connect() as conn:
+            conn.exec_driver_sql("DROP SCHEMA IF EXISTS public CASCADE")
+            conn.commit()
+
+
+_drop_public_schema_existing_tenant_databases()
+
+
+def _drop_database(db_name: str) -> None:
+    if not DATABASE_URL.startswith("postgresql"):
+        raise RuntimeError("Somente PostgreSQL é suportado")
+
+    safe_db = _sanitize_db_name(db_name)
+
+    url = make_url(DATABASE_URL)
+    admin_db = os.getenv("POSTGRES_ADMIN_DB")
+    if not admin_db or not str(admin_db).strip():
+        admin_db = str(url.database or "").strip() or "postgres"
+    admin_url = url.set(database=admin_db)
+
+    admin_url_str = admin_url.render_as_string(hide_password=False)
+    admin_connect_args = _connect_args(admin_url_str)
+    admin_engine = create_engine(
+        admin_url_str,
+        connect_args=admin_connect_args,
+        isolation_level="AUTOCOMMIT",
+        pool_pre_ping=True,
+    )
+    with admin_engine.connect() as conn:
+        exists = conn.execute(text("select 1 from pg_database where datname=:n"), {"n": safe_db}).first()
+        if not exists:
+            return
+
+        conn.execute(
+            text(
+                """
+                select pg_terminate_backend(pid)
+                from pg_stat_activity
+                where datname = :n and pid <> pg_backend_pid()
+                """
+            ),
+            {"n": safe_db},
+        )
+        conn.exec_driver_sql(f'ALTER DATABASE "{safe_db}" WITH ALLOW_CONNECTIONS false')
+        conn.execute(
+            text(
+                """
+                select pg_terminate_backend(pid)
+                from pg_stat_activity
+                where datname = :n and pid <> pg_backend_pid()
+                """
+            ),
+            {"n": safe_db},
+        )
+        conn.exec_driver_sql(f'DROP DATABASE IF EXISTS "{safe_db}"')
 
 
 def _tenant_as_out(row: TenantsModel) -> TenantOut:
@@ -1553,6 +2964,14 @@ def create_tenant(payload: TenantCreate, db: Session = Depends(get_db), auth: di
     try:
         _create_db_schema(db_name, SCHEMA_NAME)
         _seed_tenant_admin_user(db_name=db_name, tenant_id=int(row.IdTenant), slug=str(row.Slug))
+        safe_db = _sanitize_db_name(db_name)
+        if str(row.Slug).lower() != "executive":
+            tenant_name_safe = str(row.Tenant or "").strip() or str(row.Slug or "").strip().lower()
+            _ensure_executivos_tenant_columns_tenant_db(db_name=safe_db, tenant_id=int(row.IdTenant), tenant_name=tenant_name_safe)
+            _ensure_table_tenant_columns_tenant_db(db_name=safe_db, table="Ativos", tenant_id=int(row.IdTenant), tenant_name=tenant_name_safe)
+            _ensure_table_tenant_columns_tenant_db(db_name=safe_db, table="ContasPagar", tenant_id=int(row.IdTenant), tenant_name=tenant_name_safe)
+            _ensure_table_tenant_columns_tenant_db(db_name=safe_db, table="CentroCustos", tenant_id=int(row.IdTenant), tenant_name=tenant_name_safe)
+            _TENANT_DB_TENANT_COLUMNS_ENSURED.add(safe_db)
     except Exception as e:
         try:
             db.delete(row)
@@ -1700,10 +3119,39 @@ def update_tenant(
 
 
 @app.delete("/api/tenants/{id_tenant}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_tenant(id_tenant: int, db: Session = Depends(get_db), auth: dict[str, Any] = Depends(_require_superadmin)) -> None:
+def delete_tenant(
+    id_tenant: int,
+    delete_db: bool = Query(False, alias="delete_db"),
+    db: Session = Depends(get_db),
+    auth: dict[str, Any] = Depends(_require_superadmin),
+) -> None:
     row = db.get(TenantsModel, id_tenant)
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant não encontrado")
+    if int(row.IdTenant) == 1 or str(row.Slug or "").strip().lower() == "executive":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Não é permitido excluir o tenant EXECUTIVE")
+
+    if delete_db:
+        db_name = _tenant_db_name(tenant_id=int(row.IdTenant), slug=str(row.Slug))
+        try:
+            _drop_database(db_name)
+        except Exception as e:
+            msg = str(getattr(e, "orig", None) or e or "").strip()
+            msg = re.sub(r"\s+", " ", msg).strip()
+            if not msg:
+                msg = str(e.__class__.__name__)
+            if len(msg) > 240:
+                msg = msg[:240].rstrip() + "..."
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Falha ao deletar banco do tenant: {msg}")
+
+        tenant_name = str(row.Tenant or "").strip()
+        if tenant_name:
+            db.execute(delete(ExecutivoModel).where(func.lower(ExecutivoModel.Empresa) == tenant_name.lower()))
+            db.execute(delete(ContasPagarModel).where(func.lower(ContasPagarModel.Empresa) == tenant_name.lower()))
+            db.execute(delete(AtivoModel).where(func.lower(AtivoModel.Empresa) == tenant_name.lower()))
+            db.execute(delete(CentroCustosModel).where(func.lower(CentroCustosModel.Empresa) == tenant_name.lower()))
+
+    db.execute(delete(UsuariosModel).where(UsuariosModel.TenantId == int(row.IdTenant)))
     db.delete(row)
     db.commit()
 
@@ -1712,6 +3160,62 @@ def _sanitize_segment(value: str) -> str:
     cleaned = re.sub(r"[^\w\s.-]+", "", value, flags=re.UNICODE).strip()
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned or "SemEmpresa"
+
+
+def _pessoa_fisica_images_base_dir() -> Path:
+    repo_root = Path(__file__).resolve().parents[2]
+    return repo_root / "src" / "assets" / "Images" / "PessoaFisica"
+
+
+def _pessoa_fisica_tenant_dir(tenant_name: str) -> Path:
+    safe = _sanitize_segment(str(tenant_name or "").strip())
+    safe = safe.replace("..", ".")
+    return _pessoa_fisica_images_base_dir() / safe
+
+
+class PessoaFisicaImagemIn(BaseModel):
+    Id: int = Field(..., ge=1)
+    Tenant: str = Field(..., min_length=1)
+    ImageBase64: str = Field(..., min_length=1)
+
+
+@app.post("/api/pessoa-fisica/imagem")
+def upload_pessoa_fisica_imagem(payload: PessoaFisicaImagemIn, auth: dict[str, Any] = Depends(_require_auth)) -> dict[str, str]:
+    raw = str(payload.ImageBase64 or "").strip()
+    if not raw:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Imagem inválida")
+
+    b64 = raw
+    if raw.startswith("data:"):
+        parts = raw.split(",", 1)
+        if len(parts) != 2:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Imagem inválida")
+        header = parts[0].lower()
+        if "image/jpeg" not in header and "image/jpg" not in header:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="A imagem deve ser JPG")
+        b64 = parts[1]
+
+    try:
+        content = base64.b64decode(b64, validate=True)
+    except Exception:
+        try:
+            content = base64.b64decode(b64)
+        except Exception:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Imagem inválida")
+
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Imagem muito grande")
+
+    tenant_dir = _pessoa_fisica_tenant_dir(payload.Tenant)
+    tenant_dir.mkdir(parents=True, exist_ok=True)
+    out_path = (tenant_dir / f"{int(payload.Id)}.jpg").resolve()
+
+    base_dir = _pessoa_fisica_images_base_dir().resolve()
+    if os.path.commonpath([str(base_dir), str(out_path)]) != str(base_dir):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Caminho inválido")
+
+    out_path.write_bytes(content)
+    return {"path": str(out_path)}
 
 
 def _contas_pagar_base_dir() -> Path:
@@ -1865,20 +3369,59 @@ def _as_out(row: ContasPagarModel) -> ContasPagarOut:
         Usuario=row.Usuario,
         Senha=row.Senha,
         Empresa=row.Empresa,
+        TenantId=getattr(row, "TenantId", None),
+        Tenant=getattr(row, "Tenant", None),
     )
 
 
 @app.get("/api/contas-pagar", response_model=list[ContasPagarOut])
-def list_contas_pagar(empresa: Optional[str] = None, db: Session = Depends(get_db)) -> list[ContasPagarOut]:
-    stmt = select(ContasPagarModel)
-    if empresa:
-        stmt = stmt.where(ContasPagarModel.Empresa == empresa)
-    rows = db.execute(stmt.order_by(ContasPagarModel.IdContasPagar.asc())).scalars().all()
+def list_contas_pagar(
+    empresa: Optional[str] = None,
+    db: Session = Depends(get_tenant_db),
+    auth: dict[str, Any] = Depends(_require_auth),
+) -> list[ContasPagarOut]:
+    empresa_in = empresa.strip() if isinstance(empresa, str) and empresa.strip() else None
+    if _is_executive_tenant(auth) and empresa_in and empresa_in.strip().lower() == "executive":
+        empresa_in = None
+
+    if _is_superadmin(auth) or _is_executive_tenant(auth):
+        stmt_tenants = select(TenantsModel)
+        if empresa_in:
+            stmt_tenants = stmt_tenants.where(or_(TenantsModel.Tenant == empresa_in, TenantsModel.Slug == empresa_in.lower()))
+        tenants = db.execute(stmt_tenants.order_by(TenantsModel.IdTenant.asc())).scalars().all()
+
+        out: list[ContasPagarOut] = []
+        for t in tenants:
+            _ensure_tenant_columns_for_auth(tenant_id=int(t.IdTenant), tenant_slug=str(t.Slug or ""))
+            if str(t.Slug or "").lower() == "executive":
+                stmt = (
+                    select(ContasPagarModel)
+                    .where(ContasPagarModel.Empresa == str(t.Tenant))
+                    .order_by(ContasPagarModel.IdContasPagar.asc())
+                )
+                rows = db.execute(stmt).scalars().all()
+            else:
+                db_name = _tenant_db_name(tenant_id=int(t.IdTenant), slug=str(t.Slug))
+                TenantSession = _tenant_sessionmaker(db_name)
+                with TenantSession() as tdb:
+                    stmt = select(ContasPagarModel).order_by(ContasPagarModel.IdContasPagar.asc())
+                    rows = tdb.execute(stmt).scalars().all()
+            out.extend([_as_out(r) for r in rows])
+
+        out.sort(key=lambda r: (str(r.Empresa or ""), int(r.IdContasPagar or 0)))
+        return out
+
+    stmt = select(ContasPagarModel).order_by(ContasPagarModel.IdContasPagar.asc())
+    rows = db.execute(stmt).scalars().all()
     return [_as_out(r) for r in rows]
 
 
 @app.get("/api/contas-pagar/{id_contas_pagar}", response_model=ContasPagarOut)
-def get_contas_pagar(id_contas_pagar: int, db: Session = Depends(get_db)) -> ContasPagarOut:
+def get_contas_pagar(
+    id_contas_pagar: int,
+    db: Session = Depends(get_tenant_db),
+    auth: dict[str, Any] = Depends(_require_auth),
+) -> ContasPagarOut:
     row = db.get(ContasPagarModel, id_contas_pagar)
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conta a pagar não encontrada")
@@ -1886,181 +3429,232 @@ def get_contas_pagar(id_contas_pagar: int, db: Session = Depends(get_db)) -> Con
 
 
 @app.post("/api/contas-pagar", response_model=ContasPagarOut, status_code=status.HTTP_201_CREATED)
-def create_contas_pagar(payload: ContasPagarCreate, db: Session = Depends(get_db)) -> ContasPagarOut:
-    data = payload.model_dump()
-    tipo_pagamento = (data.get("TipoPagamento") or "").strip()
-    parcelas = data.get("Parcelas")
-    if tipo_pagamento.upper() in {"COTA UNICA", "COTA_UNICA", "COTAÚNICA", "COTA ÚNICA"}:
-        data["TipoPagamento"] = "COTA_UNICA"
-        data["Parcelas"] = 1
-        parcelas = 1
-    elif tipo_pagamento.upper() in {"PARCELAS", "PARCELA"}:
-        data["TipoPagamento"] = "PARCELAS"
+def create_contas_pagar(
+    payload: ContasPagarCreate,
+    tenant_id: Optional[int] = Query(None, alias="tenant_id"),
+    db: Session = Depends(get_tenant_db),
+    auth: dict[str, Any] = Depends(_require_auth),
+) -> ContasPagarOut:
+    auth_tenant_id = int(auth.get("tenant_id") or 0)
+    target_tenant_id = int(tenant_id) if (tenant_id is not None and (_is_superadmin(auth) or _is_executive_tenant(auth))) else auth_tenant_id
+    target_meta = _tenant_meta_from_id(target_tenant_id) if target_tenant_id > 0 else None
+    tenant_name = (target_meta[2] if target_meta else None) or _tenant_name_from_id(auth_tenant_id) or str(auth.get("tenant_slug") or "").strip() or None
 
-    if data.get("ValorFinal") is None:
-        data["ValorFinal"] = _calc_valor_final(data.get("ValorOriginal"), parcelas, data.get("Desconto"), data.get("Acrescimo"))
+    with _target_tenant_session(db=db, auth=auth, tenant_id=tenant_id) as tdb:
+        data = payload.model_dump()
+        data["TenantId"] = target_tenant_id if target_tenant_id > 0 else None
+        data["Tenant"] = tenant_name
+        tipo_pagamento = (data.get("TipoPagamento") or "").strip()
+        parcelas = data.get("Parcelas")
+        if tipo_pagamento.upper() in {"COTA UNICA", "COTA_UNICA", "COTAÚNICA", "COTA ÚNICA"}:
+            data["TipoPagamento"] = "COTA_UNICA"
+            data["Parcelas"] = 1
+            parcelas = 1
+        elif tipo_pagamento.upper() in {"PARCELAS", "PARCELA"}:
+            data["TipoPagamento"] = "PARCELAS"
 
-    devedor_id = data.get("DevedorIdExecutivo")
-    if devedor_id and not data.get("Devedor"):
-        exec_row = db.get(ExecutivoModel, int(devedor_id))
-        if exec_row:
-            data["Devedor"] = exec_row.Executivo
+        if data.get("ValorFinal") is None:
+            data["ValorFinal"] = _calc_valor_final(data.get("ValorOriginal"), parcelas, data.get("Desconto"), data.get("Acrescimo"))
 
-    row = ContasPagarModel(**data)
-    db.add(row)
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Falha ao criar conta a pagar")
-    db.refresh(row)
-    return _as_out(row)
+        devedor_id = data.get("DevedorIdExecutivo")
+        if devedor_id and not data.get("Devedor"):
+            exec_row = tdb.get(ExecutivoModel, int(devedor_id))
+            if exec_row:
+                data["Devedor"] = exec_row.Executivo
+
+        row = ContasPagarModel(**data)
+        tdb.add(row)
+        try:
+            tdb.commit()
+        except IntegrityError:
+            tdb.rollback()
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Falha ao criar conta a pagar")
+        tdb.refresh(row)
+        return _as_out(row)
 
 
 @app.put("/api/contas-pagar/{id_contas_pagar}", response_model=ContasPagarOut)
-def update_contas_pagar(id_contas_pagar: int, payload: ContasPagarUpdate, db: Session = Depends(get_db)) -> ContasPagarOut:
-    row = db.get(ContasPagarModel, id_contas_pagar)
-    if not row:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conta a pagar não encontrada")
+def update_contas_pagar(
+    id_contas_pagar: int,
+    payload: ContasPagarUpdate,
+    tenant_id: Optional[int] = Query(None, alias="tenant_id"),
+    db: Session = Depends(get_tenant_db),
+    auth: dict[str, Any] = Depends(_require_auth),
+) -> ContasPagarOut:
+    auth_tenant_id = int(auth.get("tenant_id") or 0)
+    target_tenant_id = int(tenant_id) if (tenant_id is not None and (_is_superadmin(auth) or _is_executive_tenant(auth))) else auth_tenant_id
+    target_meta = _tenant_meta_from_id(target_tenant_id) if target_tenant_id > 0 else None
+    tenant_name = (target_meta[2] if target_meta else None) or _tenant_name_from_id(auth_tenant_id) or str(auth.get("tenant_slug") or "").strip() or None
 
-    data: dict[str, Any] = payload.model_dump(exclude_unset=True)
-    for k, v in data.items():
-        if isinstance(v, str):
-            v = v.strip()
-        setattr(row, k, v)
+    with _target_tenant_session(db=db, auth=auth, tenant_id=tenant_id) as tdb:
+        row = tdb.get(ContasPagarModel, id_contas_pagar)
+        if not row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conta a pagar não encontrada")
 
-    tipo_pagamento = (row.TipoPagamento or "").strip()
-    if tipo_pagamento.upper() in {"COTA UNICA", "COTA_UNICA", "COTAÚNICA", "COTA ÚNICA"}:
-        row.TipoPagamento = "COTA_UNICA"
-        row.Parcelas = 1
-    elif tipo_pagamento.upper() in {"PARCELAS", "PARCELA"}:
-        row.TipoPagamento = "PARCELAS"
+        data: dict[str, Any] = payload.model_dump(exclude_unset=True)
+        for k, v in data.items():
+            if isinstance(v, str):
+                v = v.strip()
+            setattr(row, k, v)
 
-    if payload.ValorFinal is None and any(
-        key in data for key in ("ValorOriginal", "Parcelas", "Desconto", "Acrescimo", "TipoPagamento")
-    ):
-        row.ValorFinal = _calc_valor_final(
-            float(row.ValorOriginal) if row.ValorOriginal is not None else None,
-            row.Parcelas,
-            float(row.Desconto) if row.Desconto is not None else None,
-            float(row.Acrescimo) if row.Acrescimo is not None else None,
-        )
+        if target_tenant_id > 0 and (getattr(row, "TenantId", None) is None or int(getattr(row, "TenantId") or 0) == 0):
+            row.TenantId = target_tenant_id
+        if not getattr(row, "Tenant", None):
+            row.Tenant = tenant_name
 
-    if row.DevedorIdExecutivo and ("DevedorIdExecutivo" in data) and not row.Devedor:
-        exec_row = db.get(ExecutivoModel, int(row.DevedorIdExecutivo))
-        if exec_row:
-            row.Devedor = exec_row.Executivo
+        tipo_pagamento = (row.TipoPagamento or "").strip()
+        if tipo_pagamento.upper() in {"COTA UNICA", "COTA_UNICA", "COTAÚNICA", "COTA ÚNICA"}:
+            row.TipoPagamento = "COTA_UNICA"
+            row.Parcelas = 1
+        elif tipo_pagamento.upper() in {"PARCELAS", "PARCELA"}:
+            row.TipoPagamento = "PARCELAS"
 
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Falha ao atualizar conta a pagar")
-    db.refresh(row)
-    return _as_out(row)
+        if payload.ValorFinal is None and any(
+            key in data for key in ("ValorOriginal", "Parcelas", "Desconto", "Acrescimo", "TipoPagamento")
+        ):
+            row.ValorFinal = _calc_valor_final(
+                float(row.ValorOriginal) if row.ValorOriginal is not None else None,
+                row.Parcelas,
+                float(row.Desconto) if row.Desconto is not None else None,
+                float(row.Acrescimo) if row.Acrescimo is not None else None,
+            )
+
+        if row.DevedorIdExecutivo and ("DevedorIdExecutivo" in data) and not row.Devedor:
+            exec_row = tdb.get(ExecutivoModel, int(row.DevedorIdExecutivo))
+            if exec_row:
+                row.Devedor = exec_row.Executivo
+
+        try:
+            tdb.commit()
+        except IntegrityError:
+            tdb.rollback()
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Falha ao atualizar conta a pagar")
+        tdb.refresh(row)
+        return _as_out(row)
 
 
 @app.delete("/api/contas-pagar/{id_contas_pagar}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_contas_pagar(id_contas_pagar: int, db: Session = Depends(get_db)) -> None:
-    row = db.get(ContasPagarModel, id_contas_pagar)
-    if not row:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conta a pagar não encontrada")
-    db.delete(row)
-    db.commit()
+def delete_contas_pagar(
+    id_contas_pagar: int,
+    tenant_id: Optional[int] = Query(None, alias="tenant_id"),
+    db: Session = Depends(get_tenant_db),
+    auth: dict[str, Any] = Depends(_require_auth),
+) -> None:
+    with _target_tenant_session(db=db, auth=auth, tenant_id=tenant_id) as tdb:
+        row = tdb.get(ContasPagarModel, id_contas_pagar)
+        if not row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conta a pagar não encontrada")
+        tdb.delete(row)
+        tdb.commit()
 
 
 @app.post("/api/contas-pagar/{id_contas_pagar}/documento", response_model=ContasPagarOut)
 async def upload_documento(
     id_contas_pagar: int,
     file: UploadFile = File(...),
-    db: Session = Depends(get_db),
+    tenant_id: Optional[int] = Query(None, alias="tenant_id"),
+    db: Session = Depends(get_tenant_db),
+    auth: dict[str, Any] = Depends(_require_auth),
 ) -> ContasPagarOut:
-    row = db.get(ContasPagarModel, id_contas_pagar)
-    if not row:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conta a pagar não encontrada")
+    with _target_tenant_session(db=db, auth=auth, tenant_id=tenant_id) as tdb:
+        row = tdb.get(ContasPagarModel, id_contas_pagar)
+        if not row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conta a pagar não encontrada")
 
-    original_name = file.filename or "documento"
-    content = await file.read()
-    if len(content) > 100 * 1024 * 1024:
-        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Arquivo muito grande")
-    safe_name = _sanitize_segment(Path(original_name).name).replace(" ", "_") or "documento"
-    media_id = _nestjs_upload_media(filename=safe_name, content_type=file.content_type, content=content)
+        original_name = file.filename or "documento"
+        content = await file.read()
+        if len(content) > 100 * 1024 * 1024:
+            raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Arquivo muito grande")
+        safe_name = _sanitize_segment(Path(original_name).name).replace(" ", "_") or "documento"
+        media_id = _nestjs_upload_media(filename=safe_name, content_type=file.content_type, content=content)
 
-    row.DocumentoPath = f"media:{media_id}"
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Falha ao salvar documento")
-    db.refresh(row)
-    return _as_out(row)
+        row.DocumentoPath = f"media:{media_id}"
+        try:
+            tdb.commit()
+        except IntegrityError:
+            tdb.rollback()
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Falha ao salvar documento")
+        tdb.refresh(row)
+        return _as_out(row)
 
 
 @app.post("/api/contas-pagar/{id_contas_pagar}/documento/baixar-url", response_model=ContasPagarOut)
-def baixar_documento_url(id_contas_pagar: int, db: Session = Depends(get_db)) -> ContasPagarOut:
-    row = db.get(ContasPagarModel, id_contas_pagar)
-    if not row:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conta a pagar não encontrada")
-    url = (row.URLCobranca or "").strip()
-    if not url:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="URLCobranca não informado")
+def baixar_documento_url(
+    id_contas_pagar: int,
+    tenant_id: Optional[int] = Query(None, alias="tenant_id"),
+    db: Session = Depends(get_tenant_db),
+    auth: dict[str, Any] = Depends(_require_auth),
+) -> ContasPagarOut:
+    with _target_tenant_session(db=db, auth=auth, tenant_id=tenant_id) as tdb:
+        row = tdb.get(ContasPagarModel, id_contas_pagar)
+        if not row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conta a pagar não encontrada")
+        url = (row.URLCobranca or "").strip()
+        if not url:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="URLCobranca não informado")
 
-    parsed_name = Path(urllib.parse.urlparse(url).path).name
-    parsed_name = parsed_name or "documento"
-    safe_name = _sanitize_segment(parsed_name).replace(" ", "_")
+        parsed_name = Path(urllib.parse.urlparse(url).path).name
+        parsed_name = parsed_name or "documento"
+        safe_name = _sanitize_segment(parsed_name).replace(" ", "_")
 
-    try:
-        with urllib.request.urlopen(url, timeout=30) as resp:
-            content = resp.read()
-    except Exception:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Falha ao baixar documento do URLCobranca")
+        try:
+            with urllib.request.urlopen(url, timeout=30) as resp:
+                content = resp.read()
+        except Exception:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Falha ao baixar documento do URLCobranca")
 
-    if len(content) > 100 * 1024 * 1024:
-        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Arquivo muito grande")
-    media_id = _nestjs_upload_media(filename=safe_name or "documento", content_type=None, content=content)
+        if len(content) > 100 * 1024 * 1024:
+            raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Arquivo muito grande")
+        media_id = _nestjs_upload_media(filename=safe_name or "documento", content_type=None, content=content)
 
-    row.DocumentoPath = f"media:{media_id}"
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Falha ao salvar documento")
-    db.refresh(row)
-    return _as_out(row)
+        row.DocumentoPath = f"media:{media_id}"
+        try:
+            tdb.commit()
+        except IntegrityError:
+            tdb.rollback()
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Falha ao salvar documento")
+        tdb.refresh(row)
+        return _as_out(row)
 
 
 @app.get("/api/contas-pagar/{id_contas_pagar}/documento")
-def download_documento(id_contas_pagar: int, db: Session = Depends(get_db)):
-    row = db.get(ContasPagarModel, id_contas_pagar)
-    if not row:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conta a pagar não encontrada")
-    if not row.DocumentoPath:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Documento não encontrado")
+def download_documento(
+    id_contas_pagar: int,
+    tenant_id: Optional[int] = Query(None, alias="tenant_id"),
+    db: Session = Depends(get_tenant_db),
+    auth: dict[str, Any] = Depends(_require_auth),
+):
+    with _target_tenant_session(db=db, auth=auth, tenant_id=tenant_id) as tdb:
+        row = tdb.get(ContasPagarModel, id_contas_pagar)
+        if not row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conta a pagar não encontrada")
+        if not row.DocumentoPath:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Documento não encontrado")
 
-    doc_ref = str(row.DocumentoPath).strip()
-    if _is_media_ref(doc_ref):
-        media_id = _media_id_from_ref(doc_ref)
-        url = _nestjs_media_url(urllib.parse.quote(media_id))
-        try:
-            resp = urllib.request.urlopen(url, timeout=60)
-        except urllib.error.HTTPError as e:
-            if e.code == 404:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Documento não encontrado")
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Falha ao buscar documento no NestJS")
-        except Exception:
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Falha ao buscar documento no NestJS")
+        doc_ref = str(row.DocumentoPath).strip()
+        if _is_media_ref(doc_ref):
+            media_id = _media_id_from_ref(doc_ref)
+            url = _nestjs_media_url(urllib.parse.quote(media_id))
+            try:
+                resp = urllib.request.urlopen(url, timeout=60)
+            except urllib.error.HTTPError as e:
+                if e.code == 404:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Documento não encontrado")
+                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Falha ao buscar documento no NestJS")
+            except Exception:
+                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Falha ao buscar documento no NestJS")
 
-        headers: dict[str, str] = {}
-        content_type = resp.headers.get("Content-Type") or "application/octet-stream"
-        disp = resp.headers.get("Content-Disposition")
-        if disp:
-            headers["Content-Disposition"] = disp
-        length = resp.headers.get("Content-Length")
-        if length:
-            headers["Content-Length"] = length
-        return StreamingResponse(_stream_urlopen_response(resp), media_type=content_type, headers=headers)
+            headers: dict[str, str] = {}
+            content_type = resp.headers.get("Content-Type") or "application/octet-stream"
+            disp = resp.headers.get("Content-Disposition")
+            if disp:
+                headers["Content-Disposition"] = disp
+            length = resp.headers.get("Content-Length")
+            if length:
+                headers["Content-Length"] = length
+            return StreamingResponse(_stream_urlopen_response(resp), media_type=content_type, headers=headers)
 
-    target_path = _resolve_document_path(doc_ref)
-    if not target_path.exists():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Documento não encontrado")
-    return FileResponse(path=str(target_path), filename=target_path.name)
+        target_path = _resolve_document_path(doc_ref)
+        if not target_path.exists():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Documento não encontrado")
+        return FileResponse(path=str(target_path), filename=target_path.name)

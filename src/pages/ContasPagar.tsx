@@ -47,6 +47,8 @@ const authHeaders = () => {
   return headers;
 };
 
+const isExecutiveAuth = () => String(localStorage.getItem('auth_tenant_slug') || '').toLowerCase() === 'executive';
+
 const statusPagamentoColor = (value?: string) => {
   const v = (value || '').toUpperCase();
   if (v === 'PAGO') return 'green';
@@ -116,7 +118,9 @@ const ContasPagar: React.FC = () => {
     const id = record.IdContasPagar;
     (async () => {
       try {
-        const res = await fetch(`${endpoint()}/${id}`, { method: 'DELETE', headers: authHeaders() });
+        const tenantQuery =
+          isExecutiveAuth() && currentTenant?.id && currentTenant.id !== 0 ? `?tenant_id=${currentTenant.id}` : '';
+        const res = await fetch(`${endpoint()}/${id}${tenantQuery}`, { method: 'DELETE', headers: authHeaders() });
         if (!res.ok && res.status !== 204) throw new Error(await res.text());
         message.success('Conta a pagar excluída');
         fetchContasPagar();
@@ -136,8 +140,10 @@ const ContasPagar: React.FC = () => {
 
     try {
       let saved: ContaPagar;
+      const tenantQuery =
+        isExecutiveAuth() && currentTenant?.id && currentTenant.id !== 0 ? `?tenant_id=${currentTenant.id}` : '';
       if (editing?.IdContasPagar) {
-        const res = await fetch(`${endpoint()}/${editing.IdContasPagar}`, {
+        const res = await fetch(`${endpoint()}/${editing.IdContasPagar}${tenantQuery}`, {
           method: 'PUT',
           headers: authHeaders(),
           body: JSON.stringify(payload),
@@ -145,7 +151,7 @@ const ContasPagar: React.FC = () => {
         if (!res.ok) throw new Error(await res.text());
         saved = (await res.json()) as ContaPagar;
       } else {
-        const res = await fetch(endpoint(), {
+        const res = await fetch(`${endpoint()}${tenantQuery}`, {
           method: 'POST',
           headers: authHeaders(),
           body: JSON.stringify(payload),
@@ -158,7 +164,7 @@ const ContasPagar: React.FC = () => {
         const formData = new FormData();
         formData.append('file', values.documentoFile);
         const authorization = authHeaders().Authorization;
-        const res = await fetch(`${endpoint()}/${saved.IdContasPagar}/documento`, {
+        const res = await fetch(`${endpoint()}/${saved.IdContasPagar}/documento${tenantQuery}`, {
           method: 'POST',
           headers: authorization ? { Authorization: authorization } : undefined,
           body: formData,
@@ -178,7 +184,9 @@ const ContasPagar: React.FC = () => {
   const handleBaixarDocumento = useCallback(
     async (id: number) => {
       try {
-        const url = `${apiBaseUrl()}/api/contas-pagar/${id}/documento`;
+        const tenantQuery =
+          isExecutiveAuth() && currentTenant?.id && currentTenant.id !== 0 ? `?tenant_id=${currentTenant.id}` : '';
+        const url = `${apiBaseUrl()}/api/contas-pagar/${id}/documento${tenantQuery}`;
         const authorization = authHeaders().Authorization;
         const res = await fetch(url, { headers: authorization ? { Authorization: authorization } : undefined });
         if (!res.ok) throw new Error(await res.text());
@@ -190,7 +198,7 @@ const ContasPagar: React.FC = () => {
         message.error('Falha ao baixar documento');
       }
     },
-    [message]
+    [currentTenant?.id, message]
   );
 
   return (

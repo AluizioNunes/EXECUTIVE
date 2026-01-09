@@ -28,6 +28,19 @@ const baseMenuItems: MenuProps['items'] = [
       { key: '/cadastros/ativos', label: 'ATIVOS' },
     ],
   },
+  {
+    key: '/gestao-interna',
+    icon: <AppstoreOutlined />,
+    label: 'GESTÃO INTERNA',
+    children: [
+      { key: '/gestao-interna/empresas', label: 'EMPRESAS' },
+      { key: '/gestao-interna/colaboradores', label: 'COLABORADORES' },
+      { key: '/gestao-interna/departamentos', label: 'DEPARTAMENTOS' },
+      { key: '/gestao-interna/funcoes', label: 'FUNÇÕES' },
+      { key: '/gestao-interna/fornecedores', label: 'FORNECEDORES', disabled: true },
+      { key: '/gestao-interna/ativos', label: 'ATIVOS' },
+    ],
+  },
   { key: '/agenda', icon: <CalendarOutlined />, label: 'AGENDA GLOBAL' },
   { key: '/travel', icon: <GlobalOutlined />, label: 'VIAGENS' },
   { key: '/documents', icon: <FileTextOutlined />, label: 'DOCUMENTOS' },
@@ -105,6 +118,7 @@ const AppLayout: React.FC = () => {
   }, [location.pathname]);
 
   const selectedMenuKeys = useMemo(() => [normalizedPathname], [normalizedPathname]);
+  const isDashboard = normalizedPathname === '/';
 
   const toTenantPath = useCallback(
     (path: string) => {
@@ -219,7 +233,10 @@ const AppLayout: React.FC = () => {
         localStorage.removeItem('auth_nome');
         localStorage.removeItem('auth_perfil');
         localStorage.removeItem('auth_tenant_slug');
+        localStorage.removeItem('auth_tenant_id');
+        localStorage.removeItem('auth_tenant_name');
         localStorage.removeItem('auth_login_at');
+        window.dispatchEvent(new Event('executive-auth-changed'));
         setAuthToken(null);
         navigate('/');
         break;
@@ -429,12 +446,12 @@ const AppLayout: React.FC = () => {
             exit={{ opacity: 0, y: -20 }}
             transition={{ duration: 0.3 }}
             style={{ 
-              padding: 24, 
-              minHeight: 'calc(100vh - 160px)', 
-              background: colorBgContainer, 
-              borderRadius: borderRadiusLG, 
-              margin: '24px',
-              width: `calc(100% - 48px)`
+              padding: 24,
+              minHeight: 'calc(100vh - 160px)',
+              background: isDashboard ? 'transparent' : colorBgContainer,
+              borderRadius: isDashboard ? 0 : borderRadiusLG,
+              margin: isDashboard ? 0 : '24px',
+              width: isDashboard ? '100%' : `calc(100% - 48px)`
             }}
           >
             <Outlet />

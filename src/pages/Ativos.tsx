@@ -35,6 +35,8 @@ const authHeaders = () => {
   return headers;
 };
 
+const isExecutiveAuth = () => String(localStorage.getItem('auth_tenant_slug') || '').toLowerCase() === 'executive';
+
 const Ativos: React.FC = () => {
   const { currentTenant } = useTenant();
   const empresaNome = currentTenant?.id === 0 ? '' : currentTenant?.name || '';
@@ -107,7 +109,12 @@ const Ativos: React.FC = () => {
       cancelText: 'Cancelar',
       onOk: async () => {
         try {
-          const res = await fetch(`${endpoint()}/${record.IdAtivo}`, { method: 'DELETE', headers: authHeaders() });
+          const tenantQuery =
+            isExecutiveAuth() && currentTenant?.id && currentTenant.id !== 0 ? `?tenant_id=${currentTenant.id}` : '';
+          const res = await fetch(`${endpoint()}/${record.IdAtivo}${tenantQuery}`, {
+            method: 'DELETE',
+            headers: authHeaders(),
+          });
           if (!res.ok && res.status !== 204) throw new Error(await res.text());
           message.success('Ativo excluído');
           fetchAtivos();
@@ -133,8 +140,10 @@ const Ativos: React.FC = () => {
     };
 
     try {
+      const tenantQuery =
+        isExecutiveAuth() && currentTenant?.id && currentTenant.id !== 0 ? `?tenant_id=${currentTenant.id}` : '';
       if (editing?.IdAtivo) {
-        const res = await fetch(`${endpoint()}/${editing.IdAtivo}`, {
+        const res = await fetch(`${endpoint()}/${editing.IdAtivo}${tenantQuery}`, {
           method: 'PUT',
           headers: authHeaders(),
           body: JSON.stringify(payload),
@@ -142,7 +151,7 @@ const Ativos: React.FC = () => {
         if (!res.ok) throw new Error(await res.text());
         message.success('Ativo atualizado');
       } else {
-        const res = await fetch(endpoint(), {
+        const res = await fetch(`${endpoint()}${tenantQuery}`, {
           method: 'POST',
           headers: authHeaders(),
           body: JSON.stringify(payload),
